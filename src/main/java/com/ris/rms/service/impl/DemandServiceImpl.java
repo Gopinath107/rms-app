@@ -251,8 +251,7 @@ public class DemandServiceImpl implements DemandService {
 
 			boolean isFinalState = false;
 
-			Optional<Allocation> alloc =
-			        allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId());
+			Optional<Allocation> alloc = allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId());
 			if (alloc.isPresent()) {
 				summaryItem.setStage("Allocated");
 				summaryItem.setStageReason("Employee allocated on " + alloc.get().getStartDate());
@@ -400,8 +399,6 @@ public class DemandServiceImpl implements DemandService {
 
 		List<Long> allRequestIds = allRequests.stream().map(ResourceRequest::getRequestId).toList();
 
-		Map<Long, Map<String, Integer>> summaries = preCalculateDemandSummaries(allRequestIds, reqsByDemandMap);
-
 		List<Interview> allInterviews = allRequestIds.isEmpty() ? List.of()
 				: interviewRepo.findAllByRequestIdIn(allRequestIds);
 		Map<Long, List<Interview>> interviewsByReqMap = allInterviews.stream()
@@ -412,6 +409,8 @@ public class DemandServiceImpl implements DemandService {
 		Map<Long, Allocation> allocByReqMap = allAllocations.stream()
 				.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
 
+		Map<Long, Map<String, Integer>> summaries = preCalculateDemandSummaries(reqsByDemandMap, interviewsByReqMap,
+				allocByReqMap);
 		Set<Long> allEmployeeIds = allInterviews.stream().map(Interview::getEmployeeId).filter(Objects::nonNull)
 				.collect(Collectors.toSet());
 		allAllocations.stream().map(Allocation::getEmployeeId).filter(Objects::nonNull).forEach(allEmployeeIds::add);
@@ -461,49 +460,60 @@ public class DemandServiceImpl implements DemandService {
 		return new PageImpl<>(flatRows, pageable, demandPage.getTotalElements());
 	}
 
-
-	private Map<Long, Map<String, Integer>> preCalculateDemandSummaries(List<Long> allRequestIds,
-			Map<Long, List<ResourceRequest>> reqsByDemandMap) {
-
-		Map<Long, String> requestStatusMap = new LinkedHashMap<>();
-
-		Map<Long, Allocation> allocMap = allRequestIds.isEmpty() ? Map.of()
-				: allocationRepo.findByRequestIdIn(allRequestIds).stream()
-						.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
-		allocMap.keySet().forEach(reqId -> requestStatusMap.put(reqId, "Allocated"));
-
-		List<Long> nonAllocatedRequestIds = allRequestIds.stream().filter(id -> !allocMap.containsKey(id)).toList();
-
-		if (!nonAllocatedRequestIds.isEmpty()) {
-			interviewRepo.findAllByRequestIdIn(nonAllocatedRequestIds).stream()
-					.collect(Collectors.groupingBy(Interview::getRequestId)).forEach((reqId, interviews) -> {
-						if (interviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
-							requestStatusMap.put(reqId, "Rejected");
-						} else {
-							requestStatusMap.put(reqId, "Interviewing");
-						}
-					});
-		}
+	private Map<Long, Map<String, Integer>> preCalculateDemandSummaries(
+			Map<Long, List<ResourceRequest>> reqsByDemandMap, Map<Long, List<Interview>> interviewsByReqMap,
+			Map<Long, Allocation> allocByReqMap) {
 
 		Map<Long, Map<String, Integer>> summaryMap = new LinkedHashMap<>();
+
 		for (Map.Entry<Long, List<ResourceRequest>> entry : reqsByDemandMap.entrySet()) {
 			Long demandId = entry.getKey();
 			List<ResourceRequest> requests = entry.getValue();
 
-			int open = 0, interviewing = 0, allocated = 0, rejected = 0;
+			int open = 0, interviewing = 0, selected = 0, allocated = 0, onboarded = 0, rejected = 0;
+			int totalInterviewsCount = 0;
+
 			for (ResourceRequest req : requests) {
-				String status = requestStatusMap.get(req.getRequestId());
-				if (status == null) {
-					if ("Rejected".equalsIgnoreCase(req.getStatus()) || "Cancelled".equalsIgnoreCase(req.getStatus())) {
-						status = "Rejected";
+				List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(req.getRequestId(), List.of());
+				totalInterviewsCount += reqInterviews.size();
+
+				String status = "Open";
+
+				if (allocByReqMap.containsKey(req.getRequestId())) {
+					boolean isOnboarded = reqInterviews.stream()
+							.flatMap(i -> readProgress(i.getLevelProgress()).stream())
+							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel())
+									&& "OnBoarded".equalsIgnoreCase(lp.getStatus()));
+
+					if (isOnboarded) {
+						status = "Onboarded";
 					} else {
-						status = "Open";
+						status = "Allocated";
+					}
+				} else {
+					if (reqInterviews.stream().anyMatch(i -> "Selected".equalsIgnoreCase(i.getStatus()))) {
+						status = "Selected";
+					} else if (reqInterviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
+						status = "Rejected";
+					} else if (!reqInterviews.isEmpty()) {
+						status = "Interviewing";
+					} else {
+						if ("Rejected".equalsIgnoreCase(req.getStatus())
+								|| "Cancelled".equalsIgnoreCase(req.getStatus())) {
+							status = "Rejected";
+						}
 					}
 				}
 
 				switch (status) {
+				case "Onboarded":
+					onboarded++;
+					break;
 				case "Allocated":
 					allocated++;
+					break;
+				case "Selected":
+					selected++;
 					break;
 				case "Interviewing":
 					interviewing++;
@@ -516,8 +526,10 @@ public class DemandServiceImpl implements DemandService {
 					break;
 				}
 			}
-			summaryMap.put(demandId, Map.of("totalRequests", requests.size(), "open", open, "interviewing",
-					interviewing, "allocated", allocated, "rejected", rejected));
+			summaryMap.put(demandId,
+					Map.of("totalRequests", requests.size(), "open", open, "interviewing", interviewing, "selected",
+							selected, "allocated", allocated, "onboarded", onboarded, "rejected", rejected,
+							"totalInterviews", totalInterviewsCount));
 		}
 		return summaryMap;
 	}
@@ -537,24 +549,24 @@ public class DemandServiceImpl implements DemandService {
 		baseRow.setGroupCreatedAt(openAt);
 		baseRow.setGroupTotalRequested(demand.getResourceRequestsCount());
 		baseRow.setGroupStatus(demand.getOverallStatus());
-		  baseRow.setDemandOpenDt(demand.getDemandopendt());
-		    baseRow.setPriority(demand.getPriority());
-		    baseRow.setRoleDuration(demand.getRoleduration());
-		    LocalDate fulfilmentDt = null;
+		baseRow.setDemandOpenDt(demand.getDemandopendt());
+		baseRow.setPriority(demand.getPriority());
+		baseRow.setRoleDuration(demand.getRoleduration());
+		LocalDate fulfilmentDt = null;
 
-		    for (ResourceRequest req : childRequests) {
-		        Allocation alloc = allocByReqMap.get(req.getRequestId());
-		        if (alloc != null && alloc.getStartDate() != null) {
-		            if (fulfilmentDt == null || alloc.getStartDate().isAfter(fulfilmentDt)) {
-		                fulfilmentDt = alloc.getStartDate();
-		            }
-		        }
-		    }
+		for (ResourceRequest req : childRequests) {
+			Allocation alloc = allocByReqMap.get(req.getRequestId());
+			if (alloc != null && alloc.getStartDate() != null) {
+				if (fulfilmentDt == null || alloc.getStartDate().isAfter(fulfilmentDt)) {
+					fulfilmentDt = alloc.getStartDate();
+				}
+			}
+		}
 
-		    if (fulfilmentDt == null) {
-		        fulfilmentDt = demand.getFulfilmentdt();
-		    }
-		    baseRow.setFulfilmentDt(fulfilmentDt); 
+		if (fulfilmentDt == null) {
+			fulfilmentDt = demand.getFulfilmentdt();
+		}
+		baseRow.setFulfilmentDt(fulfilmentDt);
 		baseRow.setCompanyId(demand.getCompanyId());
 		companyMap.computeIfPresent(demand.getCompanyId(), (k, v) -> {
 			baseRow.setCompanyName(v.getCompanyName());
@@ -575,8 +587,11 @@ public class DemandServiceImpl implements DemandService {
 		baseRow.setSummaryTotalRequests(summary.getOrDefault("totalRequests", 0));
 		baseRow.setSummaryOpen(summary.getOrDefault("open", 0));
 		baseRow.setSummaryInterviewing(summary.getOrDefault("interviewing", 0));
+		baseRow.setSummarySelected(summary.getOrDefault("selected", 0));
 		baseRow.setSummaryAllocated(summary.getOrDefault("allocated", 0));
+		baseRow.setSummaryOnboarded(summary.getOrDefault("onboarded", 0));
 		baseRow.setSummaryRejected(summary.getOrDefault("rejected", 0));
+		baseRow.setSummaryTotalInterviews(summary.getOrDefault("totalInterviews", 0));
 
 		long pendingDays = (openAt != null) ? ChronoUnit.DAYS.between(openAt.toLocalDate(), LocalDate.now()) : 0;
 		baseRow.setSummaryPendingDays(pendingDays);
@@ -668,98 +683,99 @@ public class DemandServiceImpl implements DemandService {
 			}
 		}
 	}
-    private List<LevelProgressDto> readProgress(String json) {
-        try {
-            if (json == null || json.isBlank()) {
-                return new ArrayList<>();
-            }
-            return om.readValue(json, new TypeReference<List<LevelProgressDto>>() {});
-        } catch (Exception e) {
-            return new ArrayList<>();
-        }
-    }
 
-    private GroupFlowDto copyBaseRow(GroupFlowDto base) {
-        GroupFlowDto copy = new GroupFlowDto();
+	private List<LevelProgressDto> readProgress(String json) {
+		try {
+			if (json == null || json.isBlank()) {
+				return new ArrayList<>();
+			}
+			return om.readValue(json, new TypeReference<List<LevelProgressDto>>() {
+			});
+		} catch (Exception e) {
+			return new ArrayList<>();
+		}
+	}
 
-        copy.setGroupId(base.getGroupId());
-        copy.setGroupTitle(base.getGroupTitle());
-        copy.setGroupCreatedAt(base.getGroupCreatedAt());
-        copy.setGroupTotalRequested(base.getGroupTotalRequested());
-        copy.setGroupStatus(base.getGroupStatus());
-        copy.setGroupCreatorUserId(base.getGroupCreatorUserId());
-        copy.setGroupCreatorName(base.getGroupCreatorName());
-        copy.setGroupCreatorEmail(base.getGroupCreatorEmail());
+	private GroupFlowDto copyBaseRow(GroupFlowDto base) {
+		GroupFlowDto copy = new GroupFlowDto();
 
-        copy.setCompanyId(base.getCompanyId());
-        copy.setCompanyName(base.getCompanyName());
-        copy.setProjectId(base.getProjectId());
-        copy.setProjectName(base.getProjectName());
-        copy.setAccountId(base.getAccountId());
-        copy.setAccountName(base.getAccountName());
-        copy.setDemandOpenDt(base.getDemandOpenDt());
-        copy.setFulfilmentDt(base.getFulfilmentDt());
-        copy.setPriority(base.getPriority());
-        copy.setRoleDuration(base.getRoleDuration());
+		copy.setGroupId(base.getGroupId());
+		copy.setGroupTitle(base.getGroupTitle());
+		copy.setGroupCreatedAt(base.getGroupCreatedAt());
+		copy.setGroupTotalRequested(base.getGroupTotalRequested());
+		copy.setGroupStatus(base.getGroupStatus());
+		copy.setGroupCreatorUserId(base.getGroupCreatorUserId());
+		copy.setGroupCreatorName(base.getGroupCreatorName());
+		copy.setGroupCreatorEmail(base.getGroupCreatorEmail());
 
-        copy.setSummaryTotalRequests(base.getSummaryTotalRequests());
-        copy.setSummaryOpen(base.getSummaryOpen());
-        copy.setSummaryInterviewing(base.getSummaryInterviewing());
-        copy.setSummaryAllocated(base.getSummaryAllocated());
-        copy.setSummaryRejected(base.getSummaryRejected());
-        copy.setSummaryPendingDays(base.getSummaryPendingDays());
+		copy.setCompanyId(base.getCompanyId());
+		copy.setCompanyName(base.getCompanyName());
+		copy.setProjectId(base.getProjectId());
+		copy.setProjectName(base.getProjectName());
+		copy.setAccountId(base.getAccountId());
+		copy.setAccountName(base.getAccountName());
+		copy.setDemandOpenDt(base.getDemandOpenDt());
+		copy.setFulfilmentDt(base.getFulfilmentDt());
+		copy.setPriority(base.getPriority());
+		copy.setRoleDuration(base.getRoleDuration());
 
-        copy.setRequestId(base.getRequestId());
-        copy.setRequestStatus(base.getRequestStatus());
+		copy.setSummaryTotalRequests(base.getSummaryTotalRequests());
+		copy.setSummaryOpen(base.getSummaryOpen());
+		copy.setSummaryInterviewing(base.getSummaryInterviewing());
+		copy.setSummarySelected(base.getSummarySelected());
+		copy.setSummaryAllocated(base.getSummaryAllocated());
+		copy.setSummaryOnboarded(base.getSummaryOnboarded());
+		copy.setSummaryRejected(base.getSummaryRejected());
+		copy.setSummaryTotalInterviews(base.getSummaryTotalInterviews());
+		copy.setSummaryPendingDays(base.getSummaryPendingDays());
 
-        copy.setInterviewId(base.getInterviewId());
-        copy.setInterviewOverallStatus(base.getInterviewOverallStatus());
+		copy.setRequestId(base.getRequestId());
+		copy.setRequestStatus(base.getRequestStatus());
 
-        copy.setCandidateEmployeeId(base.getCandidateEmployeeId());
-        copy.setCandidateName(base.getCandidateName());
-        copy.setCandidateEmail(base.getCandidateEmail());
-        copy.setCandidatePhoneNumber(base.getCandidatePhoneNumber());
-        copy.setCandidateResumeStatus(base.getCandidateResumeStatus());
+		copy.setInterviewId(base.getInterviewId());
+		copy.setInterviewOverallStatus(base.getInterviewOverallStatus());
 
-        copy.setAllocationId(base.getAllocationId());
-        copy.setAllocationEmployeeName(base.getAllocationEmployeeName());
-        copy.setAllocationStartDate(base.getAllocationStartDate());
-        copy.setAllocationEndDate(base.getAllocationEndDate());
-        copy.setAllocationProjectRole(base.getAllocationProjectRole());
-        copy.setAllocationIsBillable(base.getAllocationIsBillable());
+		copy.setCandidateEmployeeId(base.getCandidateEmployeeId());
+		copy.setCandidateName(base.getCandidateName());
+		copy.setCandidateEmail(base.getCandidateEmail());
+		copy.setCandidatePhoneNumber(base.getCandidatePhoneNumber());
+		copy.setCandidateResumeStatus(base.getCandidateResumeStatus());
 
-        copy.setInterviewLevel(base.getInterviewLevel());
-        copy.setInterviewLevelStatus(base.getInterviewLevelStatus());
-        copy.setInterviewNotes(base.getInterviewNotes());
-        copy.setInterviewCompletedAt(base.getInterviewCompletedAt());
-        copy.setInterviewerUserId(base.getInterviewerUserId());
-        copy.setInterviewerName(base.getInterviewerName());
-        copy.setInterviewerEmail(base.getInterviewerEmail());
+		copy.setAllocationId(base.getAllocationId());
+		copy.setAllocationEmployeeName(base.getAllocationEmployeeName());
+		copy.setAllocationStartDate(base.getAllocationStartDate());
+		copy.setAllocationEndDate(base.getAllocationEndDate());
+		copy.setAllocationProjectRole(base.getAllocationProjectRole());
+		copy.setAllocationIsBillable(base.getAllocationIsBillable());
 
-        return copy;
-    }
+		copy.setInterviewLevel(base.getInterviewLevel());
+		copy.setInterviewLevelStatus(base.getInterviewLevelStatus());
+		copy.setInterviewNotes(base.getInterviewNotes());
+		copy.setInterviewCompletedAt(base.getInterviewCompletedAt());
+		copy.setInterviewerUserId(base.getInterviewerUserId());
+		copy.setInterviewerName(base.getInterviewerName());
+		copy.setInterviewerEmail(base.getInterviewerEmail());
 
-    private LocalDate parseFlexibleDate(String dateStr) {
-        if (dateStr == null || dateStr.isBlank()) {
-            return null;
-        }
+		return copy;
+	}
 
-        List<DateTimeFormatter> formatters = Arrays.asList(
-                DateTimeFormatter.ISO_LOCAL_DATE,
-                DateTimeFormatter.ofPattern("M/d/yyyy"),
-                DateTimeFormatter.ofPattern("d/M/yyyy"),
-                DateTimeFormatter.ofPattern("MM/dd/yyyy"),
-                DateTimeFormatter.ofPattern("dd-MM-yyyy"),
-                DateTimeFormatter.ofPattern("yyyy/MM/dd")
-        );
+	private LocalDate parseFlexibleDate(String dateStr) {
+		if (dateStr == null || dateStr.isBlank()) {
+			return null;
+		}
 
-        for (DateTimeFormatter formatter : formatters) {
-            try {
-                return LocalDate.parse(dateStr, formatter);
-            } catch (DateTimeParseException e) {
-            }
-        }
-        return null;
-    }
+		List<DateTimeFormatter> formatters = Arrays.asList(DateTimeFormatter.ISO_LOCAL_DATE,
+				DateTimeFormatter.ofPattern("M/d/yyyy"), DateTimeFormatter.ofPattern("d/M/yyyy"),
+				DateTimeFormatter.ofPattern("MM/dd/yyyy"), DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+				DateTimeFormatter.ofPattern("yyyy/MM/dd"));
+
+		for (DateTimeFormatter formatter : formatters) {
+			try {
+				return LocalDate.parse(dateStr, formatter);
+			} catch (DateTimeParseException e) {
+			}
+		}
+		return null;
+	}
 
 }

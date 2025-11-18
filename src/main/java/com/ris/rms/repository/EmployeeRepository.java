@@ -16,20 +16,45 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
 	List<Employee> findAllByCompanyId(Long companyId);
 
 	@Query(value = """
-			    SELECT
+			    (SELECT
 			        al.employee_id,
 			        p.project_name,
 			        a.account_name AS client_name,
 			        al.start_date,
-			        al.end_date
+			        al.end_date,
+			        p.project_id,
+			        p.account_id,
+			        COALESCE(al.end_date, DATE '9999-12-31') AS sortable_end_date
 			    FROM rms.allocation al
 			    JOIN rms.project p      ON p.project_id = al.project_id
 			    LEFT JOIN rms.account a ON a.account_id = p.account_id
 			    WHERE al.employee_id IN (:empIds)
-			    ORDER BY
+			    AND al.project_id IS NOT NULL)
+
+			    UNION ALL
+
+			    (SELECT
 			        al.employee_id,
-			        COALESCE(al.end_date, DATE '9999-12-31') DESC,
-			        al.start_date DESC
+			        d.project_name,
+			        a.account_name AS client_name,
+			        al.start_date,
+			        al.end_date,
+			        NULL AS project_id,
+			        d.account_id,
+			        COALESCE(al.end_date, DATE '9999-12-31') AS sortable_end_date
+			    FROM rms.allocation al
+			    JOIN rms.resource_request rr ON rr.request_id = al.request_id
+			    JOIN rms.demand d            ON d.demandid = rr.demand_id
+			    LEFT JOIN rms.account a      ON a.account_id = d.account_id
+			    WHERE al.employee_id IN (:empIds)
+			    AND al.project_id IS NULL
+			    AND al.request_id IS NOT NULL
+			    AND rr.demand_id IS NOT NULL)
+
+			    ORDER BY
+			        employee_id,
+			        sortable_end_date DESC,
+			        start_date DESC
 			""", nativeQuery = true)
 	List<Object[]> findEmployeeProjectRows(@Param("empIds") List<Long> empIds);
 

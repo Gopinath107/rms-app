@@ -69,12 +69,14 @@ import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.AccountRepository;
 import com.ris.rms.repository.AllocationRepository;
 import com.ris.rms.repository.CompanyRepository;
+import com.ris.rms.repository.DemandRepository;
 import com.ris.rms.repository.DepartmentRepository;
 import com.ris.rms.repository.EmployeeDocumentRepository;
 import com.ris.rms.repository.EmployeeRepository;
 import com.ris.rms.repository.EmployeeSkillRepository;
 import com.ris.rms.repository.ProjectRepository;
 import com.ris.rms.repository.ResReqGroupRepository;
+import com.ris.rms.repository.ResourceRequestRepository;
 import com.ris.rms.repository.SkillRepository;
 import com.ris.rms.repository.StatusMasterRepository;
 import com.ris.rms.repository.UserAccountRepository;
@@ -107,6 +109,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 	private final UserAccountRepository userAccountRepo;
 	private final ResReqGroupRepository resReqGroupRepo;
 	private final EmailService emailService;
+	private final ResourceRequestRepository rrRepo;
+	private final DemandRepository demandRepo;
 
 	@PersistenceContext
 	private EntityManager em;
@@ -150,18 +154,39 @@ public class EmployeeServiceImpl implements EmployeeService {
 		EmployeeDto out = toDto(e, companyName, deptName, skillIds, skills);
 		fillResumeFields(out);
 
-		allocationRepo.findByEmployeeIdAndStatus(id, "Active").stream().findFirst().ifPresent(alloc -> {
-			out.setCurrentProjectId(alloc.getProjectId());
-			projectRepo.findById(alloc.getProjectId()).ifPresent(proj -> {
-				out.setCurrentProject(proj.getProjectName());
-				if (proj.getAccountId() != null) {
-					out.setCurrentAccountId(proj.getAccountId());
-					accountRepo.findById(proj.getAccountId()).ifPresent(acc -> {
-						out.setCurrentClient(acc.getAccountName());
-					});
-				}
-			});
-		});
+		allocationRepo
+	    .findFirstByEmployeeIdAndStatusInOrderByStartDateDesc(
+	        id, List.of("Client","Internal","Active"))
+	    .ifPresent(alloc ->  {
+					if (alloc.getProjectId() != null) {
+
+						out.setCurrentProjectId(alloc.getProjectId());
+						projectRepo.findById(alloc.getProjectId()).ifPresent(proj -> {
+							out.setCurrentProject(proj.getProjectName());
+							if (proj.getAccountId() != null) {
+								out.setCurrentAccountId(proj.getAccountId());
+								accountRepo.findById(proj.getAccountId()).ifPresent(acc -> {
+									out.setCurrentClient(acc.getAccountName());
+								});
+							}
+						});
+					} else if (alloc.getRequestId() != null) {
+
+						rrRepo.findById(alloc.getRequestId()).ifPresent(rr -> {
+							if (rr.getDemandId() != null) {
+								demandRepo.findById(rr.getDemandId()).ifPresent(demand -> {
+									out.setCurrentProject(demand.getProjectName());
+									out.setCurrentAccountId(demand.getAccountId());
+									if (demand.getAccountId() != null) {
+										accountRepo.findById(demand.getAccountId()).ifPresent(acc -> {
+											out.setCurrentClient(acc.getAccountName());
+										});
+									}
+								});
+							}
+						});
+					}
+				});
 		return out;
 	}
 
@@ -175,8 +200,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 		if (companyId != null) {
 			base = repo.findAllByCompanyId(companyId).stream()
-					.sorted(Comparator.comparing(Employee::getEmployeeId).reversed())
-					.toList();
+					.sorted(Comparator.comparing(Employee::getEmployeeId).reversed()).toList();
 		} else if (page != null && size != null && page >= 0 && size > 0) {
 			base = repo.findAll(PageRequest.of(page, size, sort)).getContent();
 		} else {
@@ -235,7 +259,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 				Long projectId = (r.length > 5 && r[5] != null) ? ((Number) r[5]).longValue() : null;
 				Long accountId = (r.length > 6 && r[6] != null) ? ((Number) r[6]).longValue() : null;
 
-				ProjectHistoryDto historyItem = new ProjectHistoryDto(project, client, start, end, projectId, accountId);
+				ProjectHistoryDto historyItem = new ProjectHistoryDto(project, client, start, end, projectId,
+						accountId);
 				historyByEmp.computeIfAbsent(empId, k -> new ArrayList<>()).add(historyItem);
 			}
 
@@ -263,12 +288,9 @@ public class EmployeeServiceImpl implements EmployeeService {
 		}
 
 		List<EmployeeDto> finalDtoList = ordered.stream().map(e -> {
-			EmployeeDto dto = toDto(
-					e,
-					companyNames.get(e.getCompanyId()),
+			EmployeeDto dto = toDto(e, companyNames.get(e.getCompanyId()),
 					e.getDepartmentId() != null ? departmentNames.get(e.getDepartmentId()) : null,
-					skillIdsMap.get(e.getEmployeeId()),
-					skillNamesMap.get(e.getEmployeeId()));
+					skillIdsMap.get(e.getEmployeeId()), skillNamesMap.get(e.getEmployeeId()));
 
 			List<ProjectHistoryDto> hist = historyByEmp.get(e.getEmployeeId());
 			dto.setProjectHistory(hist != null ? hist : List.of());
@@ -398,8 +420,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 			converter = LocalConverter.builder().build();
 			DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
 
-			boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF)
-					.prioritizeWith(1000).schedule().get();
+			boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000).schedule()
+					.get();
 			if (!ok)
 				throw new IllegalStateException("Resume conversion to PDF failed");
 
@@ -453,9 +475,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 				result.setSuccessCount(result.getSuccessCount() + 1);
 			} catch (Exception e) {
 				result.setFailureCount(result.getFailureCount() + 1);
-				String errorMsg = String.format(
-						"Error creating employee '%s %s' (Email: %s): %s",
-						dto.getFirstName(), dto.getLastName(), dto.getEmail(), e.getMessage());
+				String errorMsg = String.format("Error creating employee '%s %s' (Email: %s): %s", dto.getFirstName(),
+						dto.getLastName(), dto.getEmail(), e.getMessage());
 				result.getErrors().add(errorMsg);
 			}
 		}
@@ -474,16 +495,13 @@ public class EmployeeServiceImpl implements EmployeeService {
 		String employeeName = ((employee.getFirstName() == null ? "" : employee.getFirstName()) + " "
 				+ (employee.getLastName() == null ? "" : employee.getLastName())).trim();
 
-		UserAccount actionUser = userAccountRepo.findById(request.getActionByUserId())
-				.orElseThrow(() -> new IllegalArgumentException("Action user not found: " + request.getActionByUserId()));
+		UserAccount actionUser = userAccountRepo.findById(request.getActionByUserId()).orElseThrow(
+				() -> new IllegalArgumentException("Action user not found: " + request.getActionByUserId()));
 
-		String actionByUserName = (actionUser.getEmployeeId() != null
-				? repo.findById(actionUser.getEmployeeId())
-						.map(e -> ((e.getFirstName() == null ? "" : e.getFirstName()) + " "
-								+ (e.getLastName() == null ? "" : e.getLastName())).trim())
-						.filter(s -> !s.isBlank())
-						.orElse(null)
-				: null);
+		String actionByUserName = (actionUser.getEmployeeId() != null ? repo.findById(actionUser.getEmployeeId())
+				.map(e -> ((e.getFirstName() == null ? "" : e.getFirstName()) + " "
+						+ (e.getLastName() == null ? "" : e.getLastName())).trim())
+				.filter(s -> !s.isBlank()).orElse(null) : null);
 		if (actionByUserName == null || actionByUserName.isBlank())
 			actionByUserName = actionUser.getEmail();
 
@@ -525,21 +543,16 @@ public class EmployeeServiceImpl implements EmployeeService {
 						.orElseThrow(() -> new IllegalArgumentException(
 								"Client Account not found for project: " + project.getProjectId()));
 
-				Company company = companyRepo.findById(project.getCompanyId())
-						.orElseThrow(() -> new IllegalArgumentException(
-								"Company not found for project: " + project.getProjectId()));
+				Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
+						() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
 
 				String emailSentTo = "Not sent (Rejected)";
 				if (shouldEmail && account.getContactPersonEmail() != null
 						&& !account.getContactPersonEmail().isBlank()) {
 					try {
-						emailService.sendResumeShareEmailAsync(
-								account.getContactPersonEmail(),
-								account.getAccountName(),
-								employeeName,
-								project.getProjectName(),
-								company.getCompanyName(),
-								resumeResource);
+						emailService.sendResumeShareEmailAsync(account.getContactPersonEmail(),
+								account.getAccountName(), employeeName, project.getProjectName(),
+								company.getCompanyName(), resumeResource);
 						emailSentTo = account.getContactPersonEmail();
 					} catch (Exception mailEx) {
 						emailSentTo = "Failed: " + mailEx.getMessage();
@@ -567,23 +580,17 @@ public class EmployeeServiceImpl implements EmployeeService {
 		meta.put("sharedWith", sharedWithList);
 		String metaJson = OM.writeValueAsString(meta);
 
-		em.createNativeQuery("update rms.employee_document "
-				+ "   set resume_share_status = :status, "
-				+ "       resume_share_meta   = cast(:meta as jsonb) "
-				+ " where document_id = :id")
-				.setParameter("status", statusCode)
-				.setParameter("meta", metaJson)
-				.setParameter("id", document.getDocumentId())
-				.executeUpdate();
+		em.createNativeQuery("update rms.employee_document " + "   set resume_share_status = :status, "
+				+ "       resume_share_meta   = cast(:meta as jsonb) " + " where document_id = :id")
+				.setParameter("status", statusCode).setParameter("meta", metaJson)
+				.setParameter("id", document.getDocumentId()).executeUpdate();
 
 		request.setSharedWith(sharedWithList);
 		return request;
 	}
 
-
 	private void validateCompanyAndDepartmentForCreate(EmployeeDto dto) {
-		companyRepo.findById(dto.getCompanyId())
-				.orElseThrow(() -> new IllegalArgumentException("Company not found"));
+		companyRepo.findById(dto.getCompanyId()).orElseThrow(() -> new IllegalArgumentException("Company not found"));
 
 		if (dto.getDepartmentId() != null) {
 			Department dep = departmentRepo.findById(dto.getDepartmentId())
@@ -609,15 +616,13 @@ public class EmployeeServiceImpl implements EmployeeService {
 	private void handleCurrentProjectAndClient(Employee saved, EmployeeDto dto) {
 		if (dto.getCurrentProjectId() != null) {
 			Project proj = projectRepo.findById(dto.getCurrentProjectId())
-					.orElseThrow(() -> new IllegalArgumentException(
-							"Project not found: " + dto.getCurrentProjectId()));
+					.orElseThrow(() -> new IllegalArgumentException("Project not found: " + dto.getCurrentProjectId()));
 			if (!Objects.equals(proj.getCompanyId(), saved.getCompanyId()))
 				throw new IllegalArgumentException("Project must belong to the same company");
 
 			if (dto.getCurrentAccountId() != null) {
-				Account acc = accountRepo.findById(dto.getCurrentAccountId())
-						.orElseThrow(() -> new IllegalArgumentException(
-								"Client (account) not found: " + dto.getCurrentAccountId()));
+				Account acc = accountRepo.findById(dto.getCurrentAccountId()).orElseThrow(
+						() -> new IllegalArgumentException("Client (account) not found: " + dto.getCurrentAccountId()));
 				if (!Objects.equals(acc.getCompanyId(), saved.getCompanyId()))
 					throw new IllegalArgumentException("Client must belong to the same company");
 				if (proj.getAccountId() != null && !Objects.equals(proj.getAccountId(), acc.getAccountId()))
@@ -628,9 +633,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 					dto.getJobTitle() != null ? dto.getJobTitle() : "Team Member");
 
 		} else if (dto.getCurrentAccountId() != null) {
-			Account acc = accountRepo.findById(dto.getCurrentAccountId())
-					.orElseThrow(() -> new IllegalArgumentException(
-							"Client (account) not found: " + dto.getCurrentAccountId()));
+			Account acc = accountRepo.findById(dto.getCurrentAccountId()).orElseThrow(
+					() -> new IllegalArgumentException("Client (account) not found: " + dto.getCurrentAccountId()));
 			if (!Objects.equals(acc.getCompanyId(), saved.getCompanyId()))
 				throw new IllegalArgumentException("Client must belong to the same company");
 		}
@@ -653,8 +657,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 				projectRepo.findById(inDto.getCurrentProjectId()).ifPresent(p -> {
 					out.setCurrentProject(p.getProjectName());
 					if (p.getAccountId() != null) {
-						accountRepo.findById(p.getAccountId())
-								.ifPresent(a -> out.setCurrentClient(a.getAccountName()));
+						accountRepo.findById(p.getAccountId()).ifPresent(a -> out.setCurrentClient(a.getAccountName()));
 					}
 				});
 			} else if (inDto.getCurrentAccountId() != null) {
@@ -688,8 +691,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 		boolean isDoc = lower.endsWith(".doc") || "application/msword".equalsIgnoreCase(contentType);
 
 		if (isPdf) {
-			var stored = storage.upload(saved.getEmployeeId(), origName, "application/pdf",
-					resume.getInputStream(), resume.getSize());
+			var stored = storage.upload(saved.getEmployeeId(), origName, "application/pdf", resume.getInputStream(),
+					resume.getSize());
 
 			EmployeeDocument doc = new EmployeeDocument();
 			doc.setEmployeeId(saved.getEmployeeId());
@@ -708,14 +711,13 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 		} else if (isDoc || isDocx) {
 			IConverter converter = null;
-			try (InputStream in = resume.getInputStream();
-					ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			try (InputStream in = resume.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
 				converter = LocalConverter.builder().build();
 				DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
 
-				boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF)
-						.prioritizeWith(1000).schedule().get();
+				boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000)
+						.schedule().get();
 				if (!ok)
 					throw new IllegalStateException("Resume conversion to PDF failed");
 
@@ -777,9 +779,9 @@ public class EmployeeServiceImpl implements EmployeeService {
 					dto.setResumeShareActionAt(node.get("actionAt").asText());
 
 				if (node.has("sharedWith") && node.get("sharedWith").isArray()) {
-					List<Map<String, Object>> list = OM.convertValue(
-							node.get("sharedWith"),
-							new TypeReference<List<Map<String, Object>>>() {});
+					List<Map<String, Object>> list = OM.convertValue(node.get("sharedWith"),
+							new TypeReference<List<Map<String, Object>>>() {
+							});
 					dto.setResumeShareAudit(list);
 				} else {
 					dto.setResumeShareAudit(List.of());
@@ -800,8 +802,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 	}
 
 	private void ensureSingleActiveAllocation(Long employeeId, Long newProjectId, String role) {
-		boolean alreadyActiveSameProject =
-				allocationRepo.existsByEmployeeIdAndProjectIdAndStatus(employeeId, newProjectId, "Active");
+		boolean alreadyActiveSameProject = allocationRepo.existsByEmployeeIdAndProjectIdAndStatus(employeeId,
+				newProjectId, "Active");
 		if (alreadyActiveSameProject)
 			return;
 
@@ -827,22 +829,17 @@ public class EmployeeServiceImpl implements EmployeeService {
 	}
 
 	private void upsertSkillsForEmployee(Long employeeId, List<String> skillNamesIn) {
-		List<String> normalized = skillNamesIn.stream()
-				.filter(Objects::nonNull)
-				.map(String::trim)
-				.filter(s -> !s.isBlank())
-				.toList();
+		List<String> normalized = skillNamesIn.stream().filter(Objects::nonNull).map(String::trim)
+				.filter(s -> !s.isBlank()).toList();
 
 		employeeSkillRepo.deleteAllByEmployeeId(employeeId);
 
 		for (String name : normalized) {
-			Long skillId = skillRepo.findBySkillNameIgnoreCase(name)
-					.map(Skill::getSkillId)
-					.orElseGet(() -> {
-						Skill s = new Skill();
-						s.setSkillName(name);
-						return skillRepo.save(s).getSkillId();
-					});
+			Long skillId = skillRepo.findBySkillNameIgnoreCase(name).map(Skill::getSkillId).orElseGet(() -> {
+				Skill s = new Skill();
+				s.setSkillName(name);
+				return skillRepo.save(s).getSkillId();
+			});
 
 			EmployeeSkill es = new EmployeeSkill();
 			es.setEmployeeId(employeeId);
@@ -870,21 +867,17 @@ public class EmployeeServiceImpl implements EmployeeService {
 	}
 
 	private List<Long> loadSkillIds(Long employeeId) {
-		return employeeSkillRepo.findAllByEmployeeId(employeeId).stream()
-				.map(EmployeeSkill::getSkillId)
-				.toList();
+		return employeeSkillRepo.findAllByEmployeeId(employeeId).stream().map(EmployeeSkill::getSkillId).toList();
 	}
 
 	private List<String> loadSkillNames(List<Long> skillIds) {
 		if (skillIds == null || skillIds.isEmpty())
 			return List.of();
-		return skillRepo.findAllById(skillIds).stream()
-				.map(Skill::getSkillName)
-				.collect(Collectors.toList());
+		return skillRepo.findAllById(skillIds).stream().map(Skill::getSkillName).collect(Collectors.toList());
 	}
 
-	private EmployeeDto toDto(Employee e, String companyName, String departmentName,
-			List<Long> skillIds, List<String> skills) {
+	private EmployeeDto toDto(Employee e, String companyName, String departmentName, List<Long> skillIds,
+			List<String> skills) {
 
 		EmployeeDto dto = new EmployeeDto();
 		dto.setEmployeeId(e.getEmployeeId());
@@ -947,12 +940,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 			throws Exception {
 		List<EmployeeDto> dtos = new ArrayList<>();
 		try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
-				CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.builder()
-						.setHeader()
-						.setSkipHeaderRecord(true)
-						.setIgnoreHeaderCase(true)
-						.setTrim(true)
-						.build())) {
+				CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.builder().setHeader()
+						.setSkipHeaderRecord(true).setIgnoreHeaderCase(true).setTrim(true).build())) {
 
 			Map<String, Integer> headerMap = csvParser.getHeaderMap();
 			validateHeaders(headerMap.keySet());
@@ -961,8 +950,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 			for (CSVRecord csvRecord : csvParser) {
 				result.setTotalRows(result.getTotalRows() + 1);
 				try {
-					EmployeeDto dto = mapRecordToDto(
-							companyId, csvRecord::get, headerMap.keySet(), rowNum);
+					EmployeeDto dto = mapRecordToDto(companyId, csvRecord::get, headerMap.keySet(), rowNum);
 					dtos.add(dto);
 				} catch (Exception e) {
 					result.setFailureCount(result.getFailureCount() + 1);
@@ -1048,8 +1036,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 		if (departmentNameFromRole != null && !departmentNameFromRole.isBlank()) {
 			String deptName = departmentNameFromRole.trim();
 			Long departmentId = departmentRepo.findByCompanyIdAndDepartmentNameIgnoreCase(companyId, deptName)
-					.map(Department::getDepartmentId)
-					.orElseGet(() -> {
+					.map(Department::getDepartmentId).orElseGet(() -> {
 						log.info("Auto-creating new department '{}' for companyId {}", deptName, companyId);
 						Department newDept = new Department();
 						newDept.setCompanyId(companyId);
@@ -1063,9 +1050,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 		String skillsRaw = valueProvider.apply("Skills");
 		if (skillsRaw != null && !skillsRaw.isBlank()) {
-			dto.setSkills(Arrays.stream(skillsRaw.split("\\|"))
-					.map(String::trim)
-					.filter(s -> !s.isEmpty())
+			dto.setSkills(Arrays.stream(skillsRaw.split("\\|")).map(String::trim).filter(s -> !s.isEmpty())
 					.collect(Collectors.toList()));
 		}
 
@@ -1078,8 +1063,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 			if (parsedDate != null) {
 				dto.setJoiningDate(parsedDate);
 			} else {
-				log.warn("Invalid date format for 'Joining Date' on row {}: '{}'. Skipping date.",
-						rowNum, joiningDateStr);
+				log.warn("Invalid date format for 'Joining Date' on row {}: '{}'. Skipping date.", rowNum,
+						joiningDateStr);
 			}
 		}
 
@@ -1112,12 +1097,9 @@ public class EmployeeServiceImpl implements EmployeeService {
 		if (dateStr == null || dateStr.isBlank())
 			return null;
 
-		List<DateTimeFormatter> formatters = Arrays.asList(
-				DateTimeFormatter.ISO_LOCAL_DATE,
-				DateTimeFormatter.ofPattern("M/d/yyyy"),
-				DateTimeFormatter.ofPattern("d/M/yyyy"),
-				DateTimeFormatter.ofPattern("MM/dd/yyyy"),
-				DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+		List<DateTimeFormatter> formatters = Arrays.asList(DateTimeFormatter.ISO_LOCAL_DATE,
+				DateTimeFormatter.ofPattern("M/d/yyyy"), DateTimeFormatter.ofPattern("d/M/yyyy"),
+				DateTimeFormatter.ofPattern("MM/dd/yyyy"), DateTimeFormatter.ofPattern("dd-MM-yyyy"),
 				DateTimeFormatter.ofPattern("yyyy/MM/dd"));
 
 		for (DateTimeFormatter formatter : formatters) {

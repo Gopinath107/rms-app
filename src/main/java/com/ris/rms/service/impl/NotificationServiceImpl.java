@@ -8,7 +8,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import org.springframework.scheduling.annotation.Async;
 @Service
 @RequiredArgsConstructor
 @Transactional
@@ -84,5 +84,26 @@ public class NotificationServiceImpl implements NotificationService {
 			throw new IllegalArgumentException("Notification not found for this user");
 		}
 		repo.deleteByNotificationIdAndUserId(notificationId, userId);
+	}
+	
+	@Override
+	@Async("mailExecutor") 
+	public void createNotificationAsync(Long userId, String title, String message, String priority, String type, Long entityId) {
+		if (userId == null) {
+			System.err.println("Async notification failed: userId is null");
+			return;
+		}
+		try {
+			Notification n = new Notification();
+			n.setUserId(userId);
+			n.setTitle(title);
+			n.setMessage(message);
+			n.setPriority(priority);
+			n.setRelatedEntityType(type);
+			n.setRelatedEntityId(entityId);
+			repo.save(n);
+		} catch (Exception e) {
+			System.err.println("Failed to save async notification for user " + userId + ": " + e.getMessage());
+		}
 	}
 }

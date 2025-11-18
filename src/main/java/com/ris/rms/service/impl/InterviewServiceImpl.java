@@ -25,9 +25,9 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.ris.rms.dto.InterviewDto;
 import com.ris.rms.dto.LevelProgressDto;
 import com.ris.rms.entity.Interview;
-import com.ris.rms.entity.Notification;
 import com.ris.rms.entity.Project;
 import com.ris.rms.entity.ResourceRequest;
+import com.ris.rms.entity.StatusMaster;
 import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.AccountRepository;
 import com.ris.rms.repository.CompanyRepository;
@@ -35,14 +35,16 @@ import com.ris.rms.repository.DemandRepository;
 import com.ris.rms.repository.EmployeeRepository;
 import com.ris.rms.repository.InterviewFeedbackRepository;
 import com.ris.rms.repository.InterviewRepository;
-import com.ris.rms.repository.NotificationRepository;
 import com.ris.rms.repository.ProjectRepository;
 import com.ris.rms.repository.ResReqGroupRepository;
 import com.ris.rms.repository.ResourceRequestRepository;
+import com.ris.rms.repository.StatusMasterRepository;
 import com.ris.rms.repository.UserAccountRepository;
 import com.ris.rms.service.EmailService;
 import com.ris.rms.service.InterviewService;
+import com.ris.rms.service.NotificationService;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -59,9 +61,10 @@ public class InterviewServiceImpl implements InterviewService {
 	private final CompanyRepository companyRepo;
 	private final EmployeeRepository employeeRepo;
 	private final UserAccountRepository userAccountRepo;
-	private final NotificationRepository notificationRepo;
+	private final NotificationService notificationService;
 	private final DemandRepository demandRepo;
 	private final ResReqGroupRepository groupRepo;
+	private final StatusMasterRepository statusMasterRepo;
 
 	private final ObjectMapper om = new ObjectMapper().registerModule(new JavaTimeModule())
 			.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -75,10 +78,13 @@ public class InterviewServiceImpl implements InterviewService {
 			.ofPattern("dd-MM-uuuu HH:mm");
 	private static final String META_LEVEL = "__META__";
 
+	private Set<String> finalInterviewStates;
+
 	@Override
 	public InterviewDto createBatchNoInterviewer(InterviewDto dto) {
 		validateCreate(dto);
 		requireEmployee(dto.getEmployeeId());
+		validateEmployeeAvailability(dto.getEmployeeId());
 		ResourceRequest rr = requireRequest(dto.getRequestId());
 		Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 		requireAllowedLevels(dto.getInterviewLevels());
@@ -106,6 +112,7 @@ public class InterviewServiceImpl implements InterviewService {
 	public InterviewDto create(InterviewDto dto) {
 		validateCreate(dto);
 		requireEmployee(dto.getEmployeeId());
+		validateEmployeeAvailability(dto.getEmployeeId());
 		ResourceRequest rr = requireRequest(dto.getRequestId());
 		Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 
@@ -117,16 +124,15 @@ public class InterviewServiceImpl implements InterviewService {
 					requireUser(lp.getInterviewerUserId());
 
 		requireAllowedLevels(dto.getInterviewLevels());
+
 		String accountName = null;
 		if (proj != null && proj.getAccountId() != null) {
-		    accountName = accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null);
+			accountName = accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null);
 		} else if (rr.getDemandId() != null) {
-		    accountName = demandRepo.findById(rr.getDemandId())
-		            .flatMap(d -> d.getAccountId() == null ? Optional.empty() : accountRepo.findById(d.getAccountId()))
-		            .map(a -> a.getAccountName())
-		            .orElse(null);
+			accountName = demandRepo.findById(rr.getDemandId())
+					.flatMap(d -> d.getAccountId() == null ? Optional.empty() : accountRepo.findById(d.getAccountId()))
+					.map(a -> a.getAccountName()).orElse(null);
 		}
-
 
 		OffsetDateTime when = resolveScheduledAt(dto);
 		List<LevelProgressDto> progress = buildProgress(dto.getInterviewLevels(), dto.getLevelProgress(),
@@ -218,6 +224,10 @@ public class InterviewServiceImpl implements InterviewService {
 				}
 		}
 
+		List<String> currentPlannedLevels = existing.getPlannedLevels();
+		if (currentPlannedLevels == null)
+			currentPlannedLevels = new ArrayList<>();
+
 		if (dto.getLevelProgress() != null && !dto.getLevelProgress().isEmpty()) {
 			for (LevelProgressDto in : dto.getLevelProgress()) {
 				if (in.getLevel() == null)
@@ -238,8 +248,13 @@ public class InterviewServiceImpl implements InterviewService {
 
 				if (StringUtils.hasText(in.getScheduledAtText())) {
 					row.setScheduledAtText(in.getScheduledAtText());
-					if (!"Selected".equalsIgnoreCase(row.getStatus()) && !"Rejected".equalsIgnoreCase(row.getStatus()))
+
+					if (!"Selected".equalsIgnoreCase(row.getStatus())
+							&& !"Rejected".equalsIgnoreCase(row.getStatus())) {
+
+						validateSequentialProgress(in.getLevel(), currentPlannedLevels, progress);
 						row.setStatus("Scheduled");
+					}
 				}
 
 				if (StringUtils.hasText(in.getInterviewNotes()))
@@ -251,6 +266,8 @@ public class InterviewServiceImpl implements InterviewService {
 			for (String lvl : new LinkedHashSet<>(dto.getRescheduleLevels())) {
 				if (!ALLOWED_LEVELS.contains(lvl))
 					throw new IllegalArgumentException("Invalid interview level: " + lvl);
+
+				validateSequentialProgress(lvl, currentPlannedLevels, progress);
 
 				LevelProgressDto row = findRow(progress, lvl).orElseGet(() -> {
 					LevelProgressDto r = new LevelProgressDto();
@@ -292,6 +309,30 @@ public class InterviewServiceImpl implements InterviewService {
 				readProgress(saved.getLevelProgress()));
 
 		return sanitizeForClient(enrich(buildCreateOrUpdateResponse(saved)));
+	}
+
+	private void validateSequentialProgress(String targetLevel, List<String> plannedOrder,
+			List<LevelProgressDto> currentProgress) {
+		if (plannedOrder == null || plannedOrder.isEmpty())
+			return;
+
+		int targetIndex = plannedOrder.indexOf(targetLevel);
+		if (targetIndex <= 0)
+			return;
+		String prevLevelName = plannedOrder.get(targetIndex - 1);
+
+		Optional<LevelProgressDto> prevRow = findRow(currentProgress, prevLevelName);
+
+		if (prevRow.isEmpty()) {
+			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
+					+ prevLevelName + " has not been started.");
+		}
+
+		String prevStatus = prevRow.get().getStatus();
+		if (!"Selected".equalsIgnoreCase(prevStatus)) {
+			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
+					+ prevLevelName + " is not 'Selected' (Current status: " + prevStatus + ").");
+		}
 	}
 
 	@Override
@@ -345,9 +386,10 @@ public class InterviewServiceImpl implements InterviewService {
 				}
 			}
 
+			String safeProjectName = (projectName != null && !projectName.isBlank()) ? projectName : "Project";
+
 			CompletableFuture<Boolean> fEmp = (employeeEmail != null && !employeeEmail.isBlank())
-					? emailService.sendEmployeeInterviewMailAsync(employeeEmail, projectName, accountName, // Use
-																											// variable
+					? emailService.sendEmployeeInterviewMailAsync(employeeEmail, safeProjectName, accountName,
 							(employeeName != null ? employeeName : "Team Member"), typeDisplay, whenRaw,
 							EmailService.MailAction.CANCELLED)
 					: CompletableFuture.completedFuture(true);
@@ -366,13 +408,11 @@ public class InterviewServiceImpl implements InterviewService {
 				String interviewerName = resolveInterviewerDisplayName(intr);
 				String candName = (employeeName != null ? employeeName : "Employee");
 
-				futures.add(emailService.sendInterviewerNotificationMailAsync(intr.getEmail(), projectName, // Use
-																											// variable
-						accountName, interviewerName, candName, typeDisplay, whenRaw,
-						EmailService.MailAction.CANCELLED));
+				futures.add(
+						emailService.sendInterviewerNotificationMailAsync(intr.getEmail(), safeProjectName, accountName,
+								interviewerName, candName, typeDisplay, whenRaw, EmailService.MailAction.CANCELLED));
 			}
 
-			CompletableFuture.allOf(CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)), fEmp).join();
 		} catch (Exception e) {
 		}
 
@@ -847,7 +887,6 @@ public class InterviewServiceImpl implements InterviewService {
 						saved.getInterviewId());
 			}
 
-			CompletableFuture.allOf(CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)), fEmp).join();
 		} catch (Exception e) {
 		}
 	}
@@ -922,14 +961,7 @@ public class InterviewServiceImpl implements InterviewService {
 	}
 
 	private void notifyUser(Long userId, String title, String message, String priority, String type, Long entityId) {
-		Notification n = new Notification();
-		n.setUserId(userId);
-		n.setTitle(title);
-		n.setMessage(message);
-		n.setPriority(priority);
-		n.setRelatedEntityType(type);
-		n.setRelatedEntityId(entityId);
-		notificationRepo.save(n);
+		notificationService.createNotificationAsync(userId, title, message, priority, type, entityId);
 	}
 
 	private List<LevelProgressDto> readProgress(String json) {
@@ -1000,5 +1032,57 @@ public class InterviewServiceImpl implements InterviewService {
 			return "Selected";
 
 		return "Pending";
+	}
+
+	private void validateEmployeeAvailability(Long employeeId) {
+		if (employeeId == null) {
+			return;
+		}
+
+		List<Interview> existingInterviews = repo.findAllByEmployeeIdOrderByScheduledAtDesc(employeeId);
+		if (existingInterviews.isEmpty()) {
+			return;
+		}
+
+		for (Interview interview : existingInterviews) {
+			String status = interview.getStatus();
+
+			boolean isActive = (status == null) || !this.finalInterviewStates.contains(status.toUpperCase());
+
+			if (isActive) {
+
+				throw new IllegalArgumentException("This employee is already in an active interview (Status: "
+						+ (status != null ? status : "Pending") + ", RequestID: " + interview.getRequestId()
+						+ "). They cannot be scheduled for a new interview until the existing one is completed, rejected, or cancelled.");
+			}
+		}
+	}
+
+	@PostConstruct
+	public void initializeFinalInterviewStates() {
+		Set<String> finalStates = new java.util.HashSet<>();
+		finalStates.add("CANCELLED");
+		finalStates.add("NOSHOW");
+
+		try {
+			List<StatusMaster> dbStates = statusMasterRepo.findByCategoryAndIsActiveTrueOrderByStatusIdAsc("INTERVIEW");
+
+			for (StatusMaster state : dbStates) {
+				String code = state.getCode().toUpperCase();
+
+				if (!code.equals("SCHEDULED") && !code.equals("HOLD")) {
+					finalStates.add(code);
+				}
+			}
+		} catch (Exception e) {
+			System.err.println(
+					"!!! WARNING: Could not load dynamic interview states from status_master. Falling back to hardcoded defaults. Error: "
+							+ e.getMessage());
+			finalStates.add("SELECTED");
+			finalStates.add("REJECTED");
+		}
+
+		this.finalInterviewStates = java.util.Collections.unmodifiableSet(finalStates);
+		System.out.println("Initialized Final Interview States: " + this.finalInterviewStates);
 	}
 }

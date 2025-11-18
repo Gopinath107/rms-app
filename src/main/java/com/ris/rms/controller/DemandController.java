@@ -166,8 +166,11 @@ public class DemandController {
 			statusSummary.put("totalRequests", nvl(g0.getSummaryTotalRequests(), 0));
 			statusSummary.put("open", nvl(g0.getSummaryOpen(), 0));
 			statusSummary.put("interviewing", nvl(g0.getSummaryInterviewing(), 0));
+			statusSummary.put("selected", nvl(g0.getSummarySelected(), 0));
 			statusSummary.put("allocated", nvl(g0.getSummaryAllocated(), 0));
+			statusSummary.put("onboarded", nvl(g0.getSummaryOnboarded(), 0)); 
 			statusSummary.put("rejected", nvl(g0.getSummaryRejected(), 0));
+			statusSummary.put("totalInterviews", nvl(g0.getSummaryTotalInterviews(), 0));
 			statusSummary.put("pendingDays", nvl(g0.getSummaryPendingDays(), 0L));
 
 			Map<Long, List<GroupFlowDto>> byRequest = groupRows.stream().filter(r -> r.getRequestId() != null).collect(

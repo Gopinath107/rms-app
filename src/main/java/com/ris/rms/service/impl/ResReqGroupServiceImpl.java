@@ -506,16 +506,17 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 
 		List<Long> allRequestIds = allRequests.stream().map(ResourceRequest::getRequestId).toList();
 
-		Map<Long, Map<String, Integer>> summaries = preCalculateSummaries(allRequestIds, reqsByGroupMap);
-
 		List<Interview> allInterviews = interviewRepo.findAllByRequestIdIn(allRequestIds);
 		Map<Long, List<Interview>> interviewsByReqMap = allInterviews.stream()
 				.collect(Collectors.groupingBy(Interview::getRequestId));
 
+    
 		List<Allocation> allAllocations = allocationRepo.findByRequestIdIn(allRequestIds);
 		Map<Long, Allocation> allocByReqMap = allAllocations.stream()
 				.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
 
+
+		Map<Long, Map<String, Integer>> summaries = preCalculateSummaries(reqsByGroupMap, interviewsByReqMap, allocByReqMap);
 		Set<Long> allEmployeeIds = allInterviews.stream().map(Interview::getEmployeeId).filter(Objects::nonNull)
 				.collect(Collectors.toSet());
 		allAllocations.stream().map(Allocation::getEmployeeId).filter(Objects::nonNull).forEach(allEmployeeIds::add);
@@ -564,63 +565,69 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 		return new PageImpl<>(flatRows, pageable, groupPage.getTotalElements());
 	}
 
-	private Map<Long, Map<String, Integer>> preCalculateSummaries(List<Long> allRequestIds,
-			Map<Long, List<ResourceRequest>> reqsByGroupMap) {
-
-		Map<Long, String> requestStatusMap = new java.util.HashMap<>();
-
-		Map<Long, Allocation> allocMap = allocationRepo.findByRequestIdIn(allRequestIds).stream()
-				.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
-		allocMap.keySet().forEach(reqId -> requestStatusMap.put(reqId, "Allocated"));
-
-		List<Long> nonAllocatedRequestIds = allRequestIds.stream().filter(id -> !allocMap.containsKey(id)).toList();
-		if (!nonAllocatedRequestIds.isEmpty()) {
-			interviewRepo.findAllByRequestIdIn(nonAllocatedRequestIds).stream()
-					.collect(Collectors.groupingBy(Interview::getRequestId)).forEach((reqId, interviews) -> {
-						if (interviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
-							requestStatusMap.put(reqId, "Rejected");
-						} else {
-							requestStatusMap.put(reqId, "Interviewing");
-						}
-					});
-		}
+private Map<Long, Map<String, Integer>> preCalculateSummaries(
+            Map<Long, List<ResourceRequest>> reqsByGroupMap,
+            Map<Long, List<Interview>> interviewsByReqMap,
+            Map<Long, Allocation> allocByReqMap) {
 
 		Map<Long, Map<String, Integer>> summaryMap = new java.util.HashMap<>();
+
 		for (Map.Entry<Long, List<ResourceRequest>> entry : reqsByGroupMap.entrySet()) {
 			Long groupId = entry.getKey();
 			List<ResourceRequest> requests = entry.getValue();
 
-			int open = 0, interviewing = 0, allocated = 0, rejected = 0;
+			int open = 0, interviewing = 0, selected = 0, allocated = 0, onboarded = 0, rejected = 0;
+            int totalInterviewsCount = 0;
+
 			for (ResourceRequest req : requests) {
-				String status = requestStatusMap.get(req.getRequestId());
-				if (status == null) {
-					if ("Rejected".equalsIgnoreCase(req.getStatus()) || "Cancelled".equalsIgnoreCase(req.getStatus())) {
-						status = "Rejected";
-					} else {
-						status = "Open";
-					}
-				}
+                List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(req.getRequestId(), List.of());
+                totalInterviewsCount += reqInterviews.size();
+                
+				String status = "Open";
+
+				if (allocByReqMap.containsKey(req.getRequestId())) {
+                     boolean isOnboarded = reqInterviews.stream().flatMap(i -> readProgress(i.getLevelProgress()).stream())
+                            .anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && "OnBoarded".equalsIgnoreCase(lp.getStatus()));
+                    
+                    if (isOnboarded) status = "Onboarded";
+                    else status = "Allocated";
+				} else {
+                    if (reqInterviews.stream().anyMatch(i -> "Selected".equalsIgnoreCase(i.getStatus()))) {
+                        status = "Selected";
+                    } else if (reqInterviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
+                        status = "Rejected";
+                    } else if (!reqInterviews.isEmpty()) {
+                        status = "Interviewing";
+                    } else {
+                        if ("Rejected".equalsIgnoreCase(req.getStatus()) || "Cancelled".equalsIgnoreCase(req.getStatus())) {
+                            status = "Rejected";
+                        }
+                    }
+                }
 
 				switch (status) {
-				case "Allocated":
-					allocated++;
-					break;
-				case "Interviewing":
-					interviewing++;
-					break;
-				case "Rejected":
-					rejected++;
-					break;
-				default:
-					open++;
-					break;
+				case "Onboarded":    onboarded++; break;
+				case "Allocated":    allocated++; break;
+				case "Selected":     selected++; break;
+				case "Interviewing": interviewing++; break;
+				case "Rejected":     rejected++; break;
+				default:             open++; break;
 				}
 			}
-			summaryMap.put(groupId, Map.of("totalRequests", requests.size(), "open", open, "interviewing", interviewing,
-					"allocated", allocated, "rejected", rejected));
+			summaryMap.put(groupId, Map.of(
+					"totalRequests", requests.size(),
+					"open", open,
+					"interviewing", interviewing,
+					"selected", selected,
+					"allocated", allocated,
+                    "onboarded", onboarded,
+					"rejected", rejected,
+                    "totalInterviews", totalInterviewsCount
+			));
 		}
 		return summaryMap;
 	}
+
 
 	private void buildFlatFlowRows(List<GroupFlowDto> flatRows, ResourceRequestGroup group,
 			List<ResourceRequest> childRequests, Map<String, Integer> summary,
@@ -669,6 +676,7 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 		baseRow.setSummaryTotalRequests(summary.getOrDefault("totalRequests", 0));
 		baseRow.setSummaryOpen(summary.getOrDefault("open", 0));
 		baseRow.setSummaryInterviewing(summary.getOrDefault("interviewing", 0));
+		baseRow.setSummarySelected(summary.getOrDefault("selected", 0));
 		baseRow.setSummaryAllocated(summary.getOrDefault("allocated", 0));
 		baseRow.setSummaryRejected(summary.getOrDefault("rejected", 0));
 		long pendingDays = (group.getCreatedAt() != null)
@@ -787,6 +795,7 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 		copy.setSummaryTotalRequests(base.getSummaryTotalRequests());
 		copy.setSummaryOpen(base.getSummaryOpen());
 		copy.setSummaryInterviewing(base.getSummaryInterviewing());
+		copy.setSummarySelected(base.getSummarySelected());
 		copy.setSummaryAllocated(base.getSummaryAllocated());
 		copy.setSummaryRejected(base.getSummaryRejected());
 		copy.setSummaryPendingDays(base.getSummaryPendingDays());

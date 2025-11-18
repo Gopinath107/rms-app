@@ -12,6 +12,6 @@ public interface NotificationService {
     void markRead(Long userId, Long notificationId, boolean isRead);
 
     int markAllRead(Long userId);
-
+    void createNotificationAsync(Long userId, String title, String message, String priority, String type, Long entityId);
     void deleteOne(Long userId, Long notificationId);
 }

@@ -27,8 +27,11 @@ public class GroupFlowDto {
     private Integer summaryTotalRequests;
     private Integer summaryOpen;
     private Integer summaryInterviewing;
+    private Integer summarySelected;
     private Integer summaryAllocated;
+    private Integer summaryOnboarded;
     private Integer summaryRejected;
+    private Integer summaryTotalInterviews;
     private Long summaryPendingDays;
 
     private Long requestId;

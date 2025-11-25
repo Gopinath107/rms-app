@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import com.ris.rms.dto.DemandCreateDto;
+import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.GroupFlowDto;
 
@@ -22,4 +23,6 @@ public interface DemandService {
 	 Page<GroupFlowDto> getDemandFlowList(Long companyId, Long accountId, Long departmentId, String status,
              String fromDate, String toDate, Pageable pageable);
 
+	 void generateReport(DemandReportRequest request);
+	 
 }

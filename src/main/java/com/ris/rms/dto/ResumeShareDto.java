@@ -21,7 +21,8 @@ public class ResumeShareDto {
 	private String status;
 
 	private List<Long> groupIds;
-
+	private List<Long> demandIds;
+	
 	@NotNull(message = "actionByUserId is required")
 	private Long actionByUserId;
 

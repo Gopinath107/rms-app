@@ -1,5 +1,7 @@
 package com.ris.rms.service;
 
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public interface EmailService {
@@ -52,5 +54,14 @@ public interface EmailService {
             String companyName,
             ResumeStorageService.ResumeResource resumeResource
     );
+
+	CompletableFuture<Boolean> sendDemandReportEmailAsync(
+	        List<String> toEmails,
+	        List<String> ccEmails,
+	        String subject,
+	        String userName,
+	        List<Map<String, Object>> reportData,
+	        String dateRangeText
+	);
 
 }

@@ -1,6 +1,8 @@
 package com.ris.rms.dto;
 
+import java.time.LocalDate;
 import java.util.List;
+
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -21,7 +23,7 @@ public class DemandCreateDto {
 
 	@NotBlank
 	private String demandTitle;
-
+	private String description;
 	private String yearsofexp;
 	private List<Long> skillIds;
 	private String roleDuration;
@@ -31,6 +33,9 @@ public class DemandCreateDto {
 	private String locationType;
 	private String workMode;
 
+	private LocalDate demandOpenDt; 
+	private LocalDate fulfilmentDt;
+	
 	@NotNull
 	@Min(1)
 	private Integer resourceRequests;

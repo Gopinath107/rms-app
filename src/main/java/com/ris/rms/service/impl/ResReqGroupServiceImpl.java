@@ -510,13 +510,12 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 		Map<Long, List<Interview>> interviewsByReqMap = allInterviews.stream()
 				.collect(Collectors.groupingBy(Interview::getRequestId));
 
-    
 		List<Allocation> allAllocations = allocationRepo.findByRequestIdIn(allRequestIds);
 		Map<Long, Allocation> allocByReqMap = allAllocations.stream()
 				.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
 
-
-		Map<Long, Map<String, Integer>> summaries = preCalculateSummaries(reqsByGroupMap, interviewsByReqMap, allocByReqMap);
+		Map<Long, Map<String, Integer>> summaries = preCalculateSummaries(reqsByGroupMap, interviewsByReqMap,
+				allocByReqMap);
 		Set<Long> allEmployeeIds = allInterviews.stream().map(Interview::getEmployeeId).filter(Objects::nonNull)
 				.collect(Collectors.toSet());
 		allAllocations.stream().map(Allocation::getEmployeeId).filter(Objects::nonNull).forEach(allEmployeeIds::add);
@@ -565,70 +564,124 @@ public class ResReqGroupServiceImpl implements ResReqGroupService {
 		return new PageImpl<>(flatRows, pageable, groupPage.getTotalElements());
 	}
 
-private Map<Long, Map<String, Integer>> preCalculateSummaries(
-            Map<Long, List<ResourceRequest>> reqsByGroupMap,
-            Map<Long, List<Interview>> interviewsByReqMap,
-            Map<Long, Allocation> allocByReqMap) {
+	private Map<Long, Map<String, Integer>> preCalculateSummaries(
+	        Map<Long, List<ResourceRequest>> reqsByGroupMap,
+	        Map<Long, List<Interview>> interviewsByReqMap,
+	        Map<Long, Allocation> allocByReqMap) {
 
-		Map<Long, Map<String, Integer>> summaryMap = new java.util.HashMap<>();
+	    Map<Long, Map<String, Integer>> summaryMap = new LinkedHashMap<>();
 
-		for (Map.Entry<Long, List<ResourceRequest>> entry : reqsByGroupMap.entrySet()) {
-			Long groupId = entry.getKey();
-			List<ResourceRequest> requests = entry.getValue();
+	    for (Map.Entry<Long, List<ResourceRequest>> entry : reqsByGroupMap.entrySet()) {
+	        Long groupId = entry.getKey();
+	        List<ResourceRequest> requests = entry.getValue();
 
-			int open = 0, interviewing = 0, selected = 0, allocated = 0, onboarded = 0, rejected = 0;
-            int totalInterviewsCount = 0;
+	        int open = 0;
+	        int interviewing = 0;
+	        int selected = 0;     
+	        int allocated = 0;    
+	        int onboarded = 0;     
+	        int rejected = 0;
+	        int totalInterviewsCount = 0;
 
-			for (ResourceRequest req : requests) {
-                List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(req.getRequestId(), List.of());
-                totalInterviewsCount += reqInterviews.size();
-                
-				String status = "Open";
+	        for (ResourceRequest req : requests) {
+	            Long reqId = req.getRequestId();
+	            List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(reqId, List.of());
+	            totalInterviewsCount += reqInterviews.size();
 
-				if (allocByReqMap.containsKey(req.getRequestId())) {
-                     boolean isOnboarded = reqInterviews.stream().flatMap(i -> readProgress(i.getLevelProgress()).stream())
-                            .anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && "OnBoarded".equalsIgnoreCase(lp.getStatus()));
-                    
-                    if (isOnboarded) status = "Onboarded";
-                    else status = "Allocated";
-				} else {
-                    if (reqInterviews.stream().anyMatch(i -> "Selected".equalsIgnoreCase(i.getStatus()))) {
-                        status = "Selected";
-                    } else if (reqInterviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
-                        status = "Rejected";
-                    } else if (!reqInterviews.isEmpty()) {
-                        status = "Interviewing";
-                    } else {
-                        if ("Rejected".equalsIgnoreCase(req.getStatus()) || "Cancelled".equalsIgnoreCase(req.getStatus())) {
-                            status = "Rejected";
-                        }
-                    }
-                }
+	            boolean hasAnyInterview = !reqInterviews.isEmpty();
+	            Allocation reqAlloc = allocByReqMap.get(reqId);
+	            boolean hasAllocation = (reqAlloc != null);
 
-				switch (status) {
-				case "Onboarded":    onboarded++; break;
-				case "Allocated":    allocated++; break;
-				case "Selected":     selected++; break;
-				case "Interviewing": interviewing++; break;
-				case "Rejected":     rejected++; break;
-				default:             open++; break;
-				}
-			}
-			summaryMap.put(groupId, Map.of(
-					"totalRequests", requests.size(),
-					"open", open,
-					"interviewing", interviewing,
-					"selected", selected,
-					"allocated", allocated,
-                    "onboarded", onboarded,
-					"rejected", rejected,
-                    "totalInterviews", totalInterviewsCount
-			));
-		}
-		return summaryMap;
+	           
+	            Interview latestInterview = reqInterviews.isEmpty()
+	                    ? null
+	                    : reqInterviews.stream()
+	                            .max(Comparator.comparing(Interview::getInterviewId,
+	                                    Comparator.nullsLast(Comparator.naturalOrder())))
+	                            .orElse(null);
+
+	            boolean anySelectedForRequest = false;
+	            boolean anyOnboardedForRequest = false;
+	            boolean anyRejectedInterview = false;
+
+	            if (latestInterview != null) {
+	                String st = latestInterview.getStatus();
+	                if ("Selected".equalsIgnoreCase(st)) {
+	                    anySelectedForRequest = true;
+	                } else if ("Rejected".equalsIgnoreCase(st)) {
+	                    anyRejectedInterview = true;
+	                }
+
+	                List<LevelProgressDto> latestLevels = readProgress(latestInterview.getLevelProgress());
+	                anyOnboardedForRequest = latestLevels.stream().anyMatch(lp ->
+	                        "ONBOARDING".equalsIgnoreCase(lp.getLevel())
+	                                && lp.getStatus() != null
+	                                && lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+	            }
+
+	            boolean isRejectedReq = "Rejected".equalsIgnoreCase(req.getStatus())
+	                    || "Cancelled".equalsIgnoreCase(req.getStatus());
+
+	            if (hasAllocation) {
+	                allocated++;
+	            }
+
+	            boolean isFinalPositive = anySelectedForRequest || anyOnboardedForRequest || hasAllocation;
+	            boolean isFinalNegative = anyRejectedInterview || isRejectedReq;
+
+	            if (!isFinalPositive && isFinalNegative) {
+	                rejected++;
+	            }
+
+	            if (!isFinalPositive && !isFinalNegative) {
+	                if (hasAnyInterview) {
+	                    interviewing++;
+	                } else {
+	                    open++;
+	                }
+	            }
+
+	       
+	            for (Interview iv : reqInterviews) {
+	                boolean interviewSelected = "Selected".equalsIgnoreCase(iv.getStatus());
+
+	                List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+	                boolean interviewOnboarded = levels.stream().anyMatch(lp ->
+	                        "ONBOARDING".equalsIgnoreCase(lp.getLevel())
+	                                && lp.getStatus() != null
+	                                && lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+
+	                boolean allocationForThisCandidate = false;
+	                if (reqAlloc != null && iv.getEmployeeId() != null) {
+	                    allocationForThisCandidate = Objects.equals(reqAlloc.getEmployeeId(), iv.getEmployeeId());
+	                }
+
+	                if (interviewOnboarded || allocationForThisCandidate) {
+	                    onboarded++;  
+	                }
+
+	                if (interviewSelected || interviewOnboarded || allocationForThisCandidate) {
+	                    selected++;   
+	                }
+	            }
+	        }
+
+	        summaryMap.put(groupId, Map.of(
+	                "totalRequests", requests.size(),
+	                "open", open,
+	                "interviewing", interviewing,
+	                "selected", selected,
+	                "allocated", allocated,
+	                "onboarded", onboarded,
+	                "rejected", rejected,
+	                "totalInterviews", totalInterviewsCount
+	        ));
+	    }
+
+	    return summaryMap;
 	}
 
-
+	
 	private void buildFlatFlowRows(List<GroupFlowDto> flatRows, ResourceRequestGroup group,
 			List<ResourceRequest> childRequests, Map<String, Integer> summary,
 			Map<Long, List<Interview>> interviewsByReqMap, Map<Long, Allocation> allocByReqMap,
@@ -678,11 +731,15 @@ private Map<Long, Map<String, Integer>> preCalculateSummaries(
 		baseRow.setSummaryInterviewing(summary.getOrDefault("interviewing", 0));
 		baseRow.setSummarySelected(summary.getOrDefault("selected", 0));
 		baseRow.setSummaryAllocated(summary.getOrDefault("allocated", 0));
+		baseRow.setSummaryOnboarded(summary.getOrDefault("onboarded", 0));
 		baseRow.setSummaryRejected(summary.getOrDefault("rejected", 0));
+		baseRow.setSummaryTotalInterviews(summary.getOrDefault("totalInterviews", 0));
+
 		long pendingDays = (group.getCreatedAt() != null)
-				? ChronoUnit.DAYS.between(group.getCreatedAt().toLocalDate(), LocalDate.now())
-				: 0;
+		        ? ChronoUnit.DAYS.between(group.getCreatedAt().toLocalDate(), LocalDate.now())
+		        : 0;
 		baseRow.setSummaryPendingDays(pendingDays);
+
 
 		if (childRequests.isEmpty()) {
 			flatRows.add(baseRow);
@@ -797,8 +854,11 @@ private Map<Long, Map<String, Integer>> preCalculateSummaries(
 		copy.setSummaryInterviewing(base.getSummaryInterviewing());
 		copy.setSummarySelected(base.getSummarySelected());
 		copy.setSummaryAllocated(base.getSummaryAllocated());
+		copy.setSummaryOnboarded(base.getSummaryOnboarded());
 		copy.setSummaryRejected(base.getSummaryRejected());
+		copy.setSummaryTotalInterviews(base.getSummaryTotalInterviews());
 		copy.setSummaryPendingDays(base.getSummaryPendingDays());
+
 
 		copy.setRequestId(base.getRequestId());
 		copy.setRequestStatus(base.getRequestStatus());

@@ -61,7 +61,11 @@ public class GroupFlowDto {
     private String interviewNotes;
     private OffsetDateTime interviewCompletedAt;
     private LocalDate demandOpenDt;
+    private String description;
+
 	private LocalDate fulfilmentDt;
+    private LocalDate actualFulfilmentDt;
+    private Boolean fulfilledWithinTarget;
     private String priority;
     private String roleDuration;
 }

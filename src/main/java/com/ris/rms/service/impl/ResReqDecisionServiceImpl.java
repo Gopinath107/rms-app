@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -155,69 +156,94 @@ public class ResReqDecisionServiceImpl implements ResReqDecisionService {
 	}
 
 	@Override
-	public Map<String, Object> hrDecide(Long requestId, Long approverUserId, String decision, String comments) {
-
-		ResourceRequest rr = rrRepo.findById(requestId)
-				.orElseThrow(() -> new IllegalArgumentException("Resource request not found"));
-
-		Long companyId = null;
-
-		if (rr.getDemandId() != null) {
-			companyId = demandRepo.findById(rr.getDemandId()).map(Demand::getCompanyId).orElse(null);
-		} else if (rr.getProjectId() != null) {
-			companyId = projectRepo.findById(rr.getProjectId()).map(Project::getCompanyId).orElse(null);
-		}
-
-		if (companyId == null && rr.getRequesterUserId() != null) {
-			companyId = uaRepo.findById(rr.getRequesterUserId()).map(UserAccount::getCompanyId).orElse(null);
-		}
-
-		if (companyId == null) {
-			throw new IllegalStateException("Cannot determine company context for this request. Request is orphaned.");
-		}
-
-		if (!"Submitted".equalsIgnoreCase(rr.getStatus())) {
-			throw new IllegalArgumentException("HR can decide only on Submitted requests");
-		}
-
+	public Map<String, Object> hrDecide(List<Long> requestIds, Long approverUserId, String decision, String comments) {
+		
+	
 		UserAccount approver = uaRepo.findById(approverUserId)
 				.orElseThrow(() -> new IllegalArgumentException("Approver user not found"));
 
-		if (!Objects.equals(approver.getCompanyId(), companyId)) {
-			throw new IllegalArgumentException("Approver must belong to the same company");
-		}
 		if (!userHasRoleAlias(approver)) {
-			throw new IllegalArgumentException("Approver must be an HR user of the same company");
+			throw new IllegalArgumentException("Approver must be an HR user");
 		}
-
+		
 		String normDecision = normalize(decision, List.of("Approved", "Rejected"));
 
-		ResourceRequestApproval a = new ResourceRequestApproval();
-		a.setApprovalId(null);
-		a.setRequestId(requestId);
-		a.setApproverUserId(approverUserId);
-		a.setApproverRole("HR");
-		a.setStatus(normDecision);
-		a.setComments(comments);
-		a.setDecidedAt(OffsetDateTime.now());
-		ResourceRequestApproval saved = hrRepo.save(a);
+		List<Map<String, Object>> results = new ArrayList<>();
+		int success = 0;
+		int failed = 0;
 
-		rr.setStatus("Approved".equals(normDecision) ? "Approved" : "Rejected");
-		rrRepo.save(rr);
+	
+		for (Long requestId : requestIds) {
+			Map<String, Object> itemRes = new LinkedHashMap<>();
+			itemRes.put("requestId", requestId);
 
-		Long requesterUserId = rr.getRequesterUserId();
-		if (requesterUserId != null) {
-			notifyUser(requesterUserId, "HR " + normDecision,
-					"Your resource request #" + requestId + " was " + normDecision + " by HR.", "Normal",
-					"ResourceRequest", requestId);
+			try {
+				ResourceRequest rr = rrRepo.findById(requestId)
+						.orElseThrow(() -> new IllegalArgumentException("Resource request not found"));
+
+				Long companyId = null;
+				if (rr.getDemandId() != null) {
+					companyId = demandRepo.findById(rr.getDemandId()).map(Demand::getCompanyId).orElse(null);
+				} else if (rr.getProjectId() != null) {
+					companyId = projectRepo.findById(rr.getProjectId()).map(Project::getCompanyId).orElse(null);
+				}
+				if (companyId == null && rr.getRequesterUserId() != null) {
+					companyId = uaRepo.findById(rr.getRequesterUserId()).map(UserAccount::getCompanyId).orElse(null);
+				}
+				if (companyId == null) {
+					throw new IllegalStateException("Cannot determine company context for request.");
+				}
+
+				if (!"Submitted".equalsIgnoreCase(rr.getStatus())) {
+					throw new IllegalArgumentException("Request is not in 'Submitted' state (Current: " + rr.getStatus() + ")");
+				}
+
+				if (!Objects.equals(approver.getCompanyId(), companyId)) {
+					throw new IllegalArgumentException("Approver does not belong to the same company as the request");
+				}
+
+				ResourceRequestApproval a = new ResourceRequestApproval();
+				a.setApprovalId(null);
+				a.setRequestId(requestId);
+				a.setApproverUserId(approverUserId);
+				a.setApproverRole("HR");
+				a.setStatus(normDecision);
+				a.setComments(comments);
+				a.setDecidedAt(OffsetDateTime.now());
+				hrRepo.save(a);
+
+				rr.setStatus("Approved".equals(normDecision) ? "Approved" : "Rejected");
+				rrRepo.save(rr);
+
+				if (rr.getRequesterUserId() != null) {
+					notifyUser(rr.getRequesterUserId(), "HR " + normDecision,
+							"Your resource request #" + requestId + " was " + normDecision + " by HR.", "Normal",
+							"ResourceRequest", requestId);
+				}
+
+				notifyRoleByAliases(companyId, "HR " + normDecision,
+						"Resource request #" + requestId + " is " + normDecision + " by HR.", "Normal", "ResourceRequest",
+						requestId);
+
+				itemRes.put("status", "Success");
+				itemRes.put("decision", normDecision);
+				success++;
+				
+			} catch (Exception e) {
+				itemRes.put("status", "Failed");
+				itemRes.put("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+				failed++;
+			}
+			results.add(itemRes);
 		}
 
-		notifyRoleByAliases(companyId, "HR " + normDecision,
-				"Resource request #" + requestId + " is " + normDecision + " by HR.", "Normal", "ResourceRequest",
-				requestId);
-
-		return Map.of("hrApprovalId", saved.getApprovalId(), "requestId", requestId, "decision", normDecision, "status",
-				rr.getStatus());
+		Map<String, Object> finalRes = new LinkedHashMap<>();
+		finalRes.put("processedCount", requestIds.size());
+		finalRes.put("successCount", success);
+		finalRes.put("failureCount", failed);
+		finalRes.put("results", results);
+		
+		return finalRes;
 	}
 
 	private static final Set<String> HR_ALIASES = Set.of("hr", "humanresources", "humanresource");

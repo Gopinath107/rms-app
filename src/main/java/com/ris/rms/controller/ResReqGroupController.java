@@ -141,7 +141,23 @@ public class ResReqGroupController {
 			GroupFlowDto g0 = groupRows.stream().findFirst().orElse(null);
 			if (g0 == null)
 				continue;
+			boolean anyShared = groupRows.stream()
+			        .anyMatch(r -> r.getCandidateResumeStatus() != null
+			                && "Shared".equalsIgnoreCase(r.getCandidateResumeStatus()));
 
+			boolean anyRejected = groupRows.stream()
+			        .anyMatch(r -> r.getCandidateResumeStatus() != null
+			                && "Rejected".equalsIgnoreCase(r.getCandidateResumeStatus()));
+
+			String resumeShareStatus;
+			if (anyShared) {
+			    resumeShareStatus = "Shared";
+			} else if (anyRejected) {
+			    resumeShareStatus = "Rejected";
+			} else {
+			   
+			    resumeShareStatus = "No Resumes";
+			}
 			Map<String, Object> groupInfo = new LinkedHashMap<>();
 			groupInfo.put("groupId", g0.getGroupId());
 			groupInfo.put("title", g0.getGroupTitle());
@@ -170,7 +186,7 @@ public class ResReqGroupController {
 			statusSummary.put("rejected", nvl(g0.getSummaryRejected(), 0));
 			statusSummary.put("totalInterviews", nvl(g0.getSummaryTotalInterviews(), 0));
 			statusSummary.put("pendingDays", nvl(g0.getSummaryPendingDays(), 0L));
-
+			statusSummary.put("resumeShareStatus", resumeShareStatus);
 			Map<Long, List<GroupFlowDto>> byRequest = groupRows.stream().filter(r -> r.getRequestId() != null).collect(
 					Collectors.groupingBy(GroupFlowDto::getRequestId, LinkedHashMap::new, Collectors.toList()));
 

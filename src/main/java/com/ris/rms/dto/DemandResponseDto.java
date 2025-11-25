@@ -9,7 +9,11 @@ import lombok.Data;
 public class DemandResponseDto {
 	private Long demandid;
 	private String demandTitle;
+	private String description;
 	private LocalDate demandOpenDt;
+	private LocalDate fulfilmentDt;
+	private LocalDate actualFulfilmentDt;
+	private Boolean fulfilledWithinTarget;
 	private Long companyId;
 	private String companyName;
 	private Long accountId;
@@ -24,7 +28,7 @@ public class DemandResponseDto {
 	private String yearsofexp;
 	private List<Long> skillIds;
 	private List<String> skillName;
-	private LocalDate fulfilmentDt;
+
 	private String roleDuration;
 	private String locationType;
 	private String workLocPref;

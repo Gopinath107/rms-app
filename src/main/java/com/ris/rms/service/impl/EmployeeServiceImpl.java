@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -37,11 +38,14 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -57,6 +61,7 @@ import com.ris.rms.dto.ResumeShareDto;
 import com.ris.rms.entity.Account;
 import com.ris.rms.entity.Allocation;
 import com.ris.rms.entity.Company;
+import com.ris.rms.entity.Demand;
 import com.ris.rms.entity.Department;
 import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.EmployeeDocument;
@@ -95,6 +100,9 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class EmployeeServiceImpl implements EmployeeService {
 
+	@Autowired
+	@Lazy
+	private EmployeeService self;
 	private final EmployeeRepository repo;
 	private final CompanyRepository companyRepo;
 	private final DepartmentRepository departmentRepo;
@@ -154,39 +162,71 @@ public class EmployeeServiceImpl implements EmployeeService {
 		EmployeeDto out = toDto(e, companyName, deptName, skillIds, skills);
 		fillResumeFields(out);
 
-		allocationRepo
-	    .findFirstByEmployeeIdAndStatusInOrderByStartDateDesc(
-	        id, List.of("Client","Internal","Active"))
-	    .ifPresent(alloc ->  {
-					if (alloc.getProjectId() != null) {
+		// Fetch all active allocations
+		List<Allocation> allocs = allocationRepo.findByEmployeeIdAndStatusInOrderByStartDateDesc(id,
+				List.of("Client", "Internal", "Active"));
 
-						out.setCurrentProjectId(alloc.getProjectId());
-						projectRepo.findById(alloc.getProjectId()).ifPresent(proj -> {
-							out.setCurrentProject(proj.getProjectName());
-							if (proj.getAccountId() != null) {
-								out.setCurrentAccountId(proj.getAccountId());
-								accountRepo.findById(proj.getAccountId()).ifPresent(acc -> {
-									out.setCurrentClient(acc.getAccountName());
-								});
-							}
-						});
-					} else if (alloc.getRequestId() != null) {
+		List<String> currentProjects = new ArrayList<>();
+		List<String> currentClients = new ArrayList<>();
+		Long lastProjectId = null;
+		Long lastAccountId = null;
+		LocalDate today = LocalDate.now();
 
-						rrRepo.findById(alloc.getRequestId()).ifPresent(rr -> {
-							if (rr.getDemandId() != null) {
-								demandRepo.findById(rr.getDemandId()).ifPresent(demand -> {
-									out.setCurrentProject(demand.getProjectName());
-									out.setCurrentAccountId(demand.getAccountId());
-									if (demand.getAccountId() != null) {
-										accountRepo.findById(demand.getAccountId()).ifPresent(acc -> {
-											out.setCurrentClient(acc.getAccountName());
-										});
-									}
-								});
-							}
-						});
+		for (Allocation alloc : allocs) {
+			if (alloc.getEndDate() != null && alloc.getEndDate().isBefore(today)) {
+				continue;
+			}
+
+			String projName = null;
+			String clientName = null;
+
+			if (alloc.getProjectId() != null) {
+				lastProjectId = alloc.getProjectId();
+				var p = projectRepo.findById(alloc.getProjectId()).orElse(null);
+				if (p != null) {
+					projName = p.getProjectName();
+					if (p.getAccountId() != null) {
+						lastAccountId = p.getAccountId();
+						var a = accountRepo.findById(p.getAccountId()).orElse(null);
+						if (a != null) {
+							clientName = a.getAccountName();
+						}
 					}
-				});
+				}
+			} else if (alloc.getRequestId() != null) {
+				var rr = rrRepo.findById(alloc.getRequestId()).orElse(null);
+				if (rr != null && rr.getDemandId() != null) {
+					var d = demandRepo.findById(rr.getDemandId()).orElse(null);
+					if (d != null) {
+						projName = d.getProjectName();
+						if (d.getAccountId() != null) {
+							lastAccountId = d.getAccountId();
+							var a = accountRepo.findById(d.getAccountId()).orElse(null);
+							if (a != null) {
+								clientName = a.getAccountName();
+							}
+						}
+					}
+				}
+			}
+
+			if (projName != null) {
+				// CHANGED: Removed date from string, just project name
+				currentProjects.add(projName);
+			}
+			if (clientName != null) {
+				currentClients.add(clientName);
+			}
+		}
+
+		if (!currentProjects.isEmpty()) {
+			out.setCurrentProject(String.join(", ", currentProjects));
+			out.setCurrentClient(String.join(", ", currentClients.stream().distinct().toList()));
+			
+			out.setCurrentProjectId(lastProjectId);
+			out.setCurrentAccountId(lastAccountId);
+		}
+
 		return out;
 	}
 
@@ -270,20 +310,38 @@ public class EmployeeServiceImpl implements EmployeeService {
 				if (hist == null || hist.isEmpty())
 					continue;
 
-				ProjectHistoryDto pick = null;
+				List<String> activeProjects = new ArrayList<>();
+				List<String> activeClients = new ArrayList<>();
+				Long lastActiveProjId = null;
+				Long lastActiveAccId = null;
+
+				boolean foundActive = false;
+				
 				for (ProjectHistoryDto ph : hist) {
 					if (ph.getStartDate() != null && (ph.getEndDate() == null || !ph.getEndDate().isBefore(today))) {
-						pick = ph;
-						break;
+						// CHANGED: Removed date from string, just project name
+						activeProjects.add(ph.getProjectName() != null ? ph.getProjectName() : "N/A");
+						if (ph.getClientName() != null) {
+							activeClients.add(ph.getClientName());
+						}
+						lastActiveProjId = ph.getProjectId();
+						lastActiveAccId = ph.getAccountId();
+						foundActive = true;
 					}
 				}
-				if (pick == null)
-					pick = hist.get(0);
 
-				currentClientByEmp.put(id, pick.getClientName() != null ? pick.getClientName() : "N/A");
-				currentProjectByEmp.put(id, pick.getProjectName() != null ? pick.getProjectName() : "N/A");
-				currentProjectIdByEmp.put(id, pick.getProjectId());
-				currentAccountIdByEmp.put(id, pick.getAccountId());
+				if (foundActive) {
+					currentProjectByEmp.put(id, String.join(", ", activeProjects));
+					currentClientByEmp.put(id, String.join(", ", activeClients.stream().distinct().toList()));
+					currentProjectIdByEmp.put(id, lastActiveProjId);
+					currentAccountIdByEmp.put(id, lastActiveAccId);
+				} else {
+					ProjectHistoryDto pick = hist.get(0);
+					currentClientByEmp.put(id, pick.getClientName() != null ? pick.getClientName() : "N/A");
+					currentProjectByEmp.put(id, pick.getProjectName() != null ? pick.getProjectName() : "N/A");
+					currentProjectIdByEmp.put(id, pick.getProjectId());
+					currentAccountIdByEmp.put(id, pick.getAccountId());
+				}
 			}
 		}
 
@@ -445,7 +503,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 	}
 
 	@Override
-	@Transactional
+	@Transactional(propagation = Propagation.NOT_SUPPORTED)
 	public ImportResultDto importEmployees(Long companyId, InputStream inputStream, String filename) throws Exception {
 		ImportResultDto result = new ImportResultDto();
 		List<EmployeeDto> employeesToCreate = new ArrayList<>();
@@ -471,7 +529,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 		for (EmployeeDto dto : employeesToCreate) {
 			try {
-				create(dto, null);
+				self.create(dto, null);
 				result.setSuccessCount(result.getSuccessCount() + 1);
 			} catch (Exception e) {
 				result.setFailureCount(result.getFailureCount() + 1);
@@ -506,88 +564,139 @@ public class EmployeeServiceImpl implements EmployeeService {
 			actionByUserName = actionUser.getEmail();
 
 		EmployeeDocument document = employeeDocumentRepo.findPrimaryResume(request.getEmployeeId())
-				.orElseThrow(() -> new IllegalArgumentException("No resume found for this employee to share"));
+				.orElseThrow(() -> new IllegalArgumentException(
+						"No resume available for this employee. Please upload a resume to proceed."));
 
 		request.setEmployeeName(employeeName);
 		String statusCode = status.getCode();
 		request.setStatusSet(statusCode);
 		request.setActionByUserName(actionByUserName);
-		request.setActionAt(java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime());
+		request.setActionAt(ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime());
 
 		boolean shouldEmail = "Shared".equalsIgnoreCase(statusCode);
 
 		ResumeStorageService.ResumeResource resumeResource = null;
-		if (shouldEmail && request.getGroupIds() != null && !request.getGroupIds().isEmpty()) {
-			resumeResource = storage.load(document);
-			if (resumeResource == null)
-				throw new IllegalStateException("Failed to load resume file from storage");
+		if (shouldEmail) {
+		    resumeResource = storage.load(document);
+		    if (resumeResource == null) {
+		        throw new IllegalStateException("Failed to load resume file from storage");
+		    }
 		}
-
 		List<Map<String, Object>> sharedWithList = new ArrayList<>();
-		if (request.getGroupIds() != null) {
-			for (Long groupId : request.getGroupIds()) {
-				if (groupId == null)
-					continue;
 
-				ResourceRequestGroup group = resReqGroupRepo.findById(groupId)
-						.orElseThrow(() -> new IllegalArgumentException("Group not found: " + groupId));
+        if (request.getDemandIds() != null) {
+            for (Long dId : request.getDemandIds()) {
+                if (dId == null) continue;
 
-				Project project = projectRepo.findById(group.getProjectId())
-						.orElseThrow(() -> new IllegalArgumentException("Project not found for group: " + groupId));
+                Demand demand = demandRepo.findById(dId)
+                        .orElseThrow(() -> new IllegalArgumentException("Demand not found: " + dId));
 
-				if (project.getAccountId() == null)
-					throw new IllegalArgumentException(
-							"Project " + project.getProjectId() + " is not linked to an Account.");
+                Company company = companyRepo.findById(demand.getCompanyId()).orElseThrow(
+                        () -> new IllegalArgumentException("Company not found for demand: " + demand.getDemandid()));
 
-				Account account = accountRepo.findById(project.getAccountId())
-						.orElseThrow(() -> new IllegalArgumentException(
-								"Client Account not found for project: " + project.getProjectId()));
+                String clientName = "Internal / No Account";
+                Long clientId = null;
 
-				Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
-						() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
+                if (demand.getAccountId() != null) {
+                    Account account = accountRepo.findById(demand.getAccountId()).orElse(null);
+                    if (account != null) {
+                        clientName = account.getAccountName();
+                        clientId = account.getAccountId();
+                    }
+                }
 
-				String emailSentTo = "Not sent (Rejected)";
-				if (shouldEmail && account.getContactPersonEmail() != null
-						&& !account.getContactPersonEmail().isBlank()) {
-					try {
-						emailService.sendResumeShareEmailAsync(account.getContactPersonEmail(),
-								account.getAccountName(), employeeName, project.getProjectName(),
-								company.getCompanyName(), resumeResource);
-						emailSentTo = account.getContactPersonEmail();
-					} catch (Exception mailEx) {
-						emailSentTo = "Failed: " + mailEx.getMessage();
+                String emailSentTo = "Not sent";
+                if (shouldEmail && actionUser.getEmail() != null && !actionUser.getEmail().isBlank()) {
+                    try {
+                        emailService.sendResumeShareEmailAsync(actionUser.getEmail(), clientName, employeeName,
+                                demand.getProjectName(), company.getCompanyName(), resumeResource);
+                        emailSentTo = actionUser.getEmail();
+                    } catch (Exception mailEx) {
+                        emailSentTo = "Failed: " + mailEx.getMessage();
+                    }
+                } else if (shouldEmail) {
+                    emailSentTo = "Action User has no Email";
+                }
+
+                Map<String, Object> info = new LinkedHashMap<>();
+                info.put("type", "DEMAND");
+                info.put("demandId", demand.getDemandid());
+                info.put("demandTitle", demand.getDemandtitle());
+                info.put("projectName", demand.getProjectName());
+                info.put("clientId", clientId);
+                info.put("clientName", clientName);
+                info.put("emailSentTo", emailSentTo);
+                info.put("status", statusCode);
+                sharedWithList.add(info);
+            }
+        }
+
+
+				if (request.getGroupIds() != null) {
+					for (Long groupId : request.getGroupIds()) {
+						if (groupId == null)
+							continue;
+
+						ResourceRequestGroup group = resReqGroupRepo.findById(groupId)
+								.orElseThrow(() -> new IllegalArgumentException("Group not found: " + groupId));
+
+						Project project = projectRepo.findById(group.getProjectId())
+								.orElseThrow(() -> new IllegalArgumentException("Project not found for group: " + groupId));
+
+						if (project.getAccountId() == null)
+							throw new IllegalArgumentException(
+									"Project " + project.getProjectId() + " is not linked to an Account.");
+
+						Account account = accountRepo.findById(project.getAccountId())
+								.orElseThrow(() -> new IllegalArgumentException(
+										"Client Account not found for project: " + project.getProjectId()));
+
+						Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
+								() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
+
+						String emailSentTo = "Not sent (Rejected)";
+						if (shouldEmail && account.getContactPersonEmail() != null
+								&& !account.getContactPersonEmail().isBlank()) {
+							try {
+								emailService.sendResumeShareEmailAsync(account.getContactPersonEmail(),
+										account.getAccountName(), employeeName, project.getProjectName(),
+										company.getCompanyName(), resumeResource);
+								emailSentTo = account.getContactPersonEmail();
+							} catch (Exception mailEx) {
+								emailSentTo = "Failed: " + mailEx.getMessage();
+							}
+						} else if (shouldEmail) {
+							emailSentTo = "No Email on File";
+						}
+
+						Map<String, Object> info = new LinkedHashMap<>();
+						info.put("type", "GROUP");
+						info.put("groupId", groupId);
+						info.put("projectId", project.getProjectId());
+						info.put("projectName", project.getProjectName());
+						info.put("clientId", account.getAccountId());
+						info.put("clientName", account.getAccountName());
+						info.put("emailSentTo", emailSentTo);
+						info.put("status", statusCode);
+						sharedWithList.add(info);
 					}
-				} else if (shouldEmail) {
-					emailSentTo = "No Email on File";
 				}
 
-				Map<String, Object> info = new LinkedHashMap<>();
-				info.put("groupId", groupId);
-				info.put("projectId", project.getProjectId());
-				info.put("projectName", project.getProjectName());
-				info.put("clientId", account.getAccountId());
-				info.put("clientName", account.getAccountName());
-				info.put("emailSentTo", emailSentTo);
-				info.put("status", statusCode);
-				sharedWithList.add(info);
+				Map<String, Object> meta = new LinkedHashMap<>();
+				meta.put("actionByUserId", request.getActionByUserId());
+				meta.put("actionByUserName", request.getActionByUserName());
+				meta.put("actionAt", request.getActionAt() != null ? request.getActionAt().toString() : null);
+				meta.put("sharedWith", sharedWithList);
+				String metaJson = OM.writeValueAsString(meta);
+
+				em.createNativeQuery("update rms.employee_document " + "   set resume_share_status = :status, "
+						+ "       resume_share_meta   = cast(:meta as jsonb) " + " where document_id = :id")
+						.setParameter("status", statusCode).setParameter("meta", metaJson)
+						.setParameter("id", document.getDocumentId()).executeUpdate();
+
+				request.setSharedWith(sharedWithList);
+				return request;
 			}
-		}
-
-		Map<String, Object> meta = new LinkedHashMap<>();
-		meta.put("actionByUserId", request.getActionByUserId());
-		meta.put("actionByUserName", request.getActionByUserName());
-		meta.put("actionAt", request.getActionAt() != null ? request.getActionAt().toString() : null);
-		meta.put("sharedWith", sharedWithList);
-		String metaJson = OM.writeValueAsString(meta);
-
-		em.createNativeQuery("update rms.employee_document " + "   set resume_share_status = :status, "
-				+ "       resume_share_meta   = cast(:meta as jsonb) " + " where document_id = :id")
-				.setParameter("status", statusCode).setParameter("meta", metaJson)
-				.setParameter("id", document.getDocumentId()).executeUpdate();
-
-		request.setSharedWith(sharedWithList);
-		return request;
-	}
 
 	private void validateCompanyAndDepartmentForCreate(EmployeeDto dto) {
 		companyRepo.findById(dto.getCompanyId()).orElseThrow(() -> new IllegalArgumentException("Company not found"));

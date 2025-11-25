@@ -15,7 +15,8 @@ public interface AllocationRepository extends JpaRepository<Allocation, Long> {
 	Optional<Allocation> findByRequestId(Long requestId);
 	Optional<Allocation> findFirstByEmployeeIdAndStatusInOrderByStartDateDesc(
 	        Long employeeId, List<String> statuses);
-
-    Optional<Allocation> findFirstByRequestIdOrderByStartDateDesc(Long requestId);
+	List<Allocation> findByEmployeeIdAndStatusInOrderByStartDateDesc(Long employeeId, List<String> statuses);
+  
+	Optional<Allocation> findFirstByRequestIdOrderByStartDateDesc(Long requestId);
 	List<Allocation> findByRequestIdIn(List<Long> requestIds);
 }

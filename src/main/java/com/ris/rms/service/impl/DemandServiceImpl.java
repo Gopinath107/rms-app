@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -32,6 +33,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.ris.rms.dto.DemandCreateDto;
+import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandRequestSummaryDto;
 import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.DemandStageCountsDto;
@@ -60,6 +62,7 @@ import com.ris.rms.repository.ResourceRequestRepository;
 import com.ris.rms.repository.SkillRepository;
 import com.ris.rms.repository.UserAccountRepository;
 import com.ris.rms.service.DemandService;
+import com.ris.rms.service.EmailService;
 import com.ris.rms.service.ResourceRequestService;
 
 import jakarta.persistence.criteria.Predicate;
@@ -84,6 +87,7 @@ public class DemandServiceImpl implements DemandService {
 	private final InterviewRepository interviewRepo;
 	private final AllocationRepository allocationRepo;
 	private final EmployeeDocumentRepository employeeDocumentRepo;
+	private final EmailService emailService;
 
 	private final ObjectMapper om = new ObjectMapper().registerModule(new JavaTimeModule())
 			.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -106,6 +110,17 @@ public class DemandServiceImpl implements DemandService {
 		demand.setDepartmentId(dto.getDepartmentId());
 		demand.setProjectName(dto.getProjectName());
 		demand.setDemandtitle(dto.getDemandTitle());
+		demand.setDescription(dto.getDescription());
+
+		if (dto.getDemandOpenDt() != null) {
+			demand.setDemandopendt(dto.getDemandOpenDt());
+		} else {
+			demand.setDemandopendt(LocalDate.now());
+		}
+
+		demand.setFulfilmentdt(dto.getFulfilmentDt());
+		demand.setActualFulfilmentDt(null);
+
 		demand.setYearsofexp(dto.getYearsofexp());
 		demand.setSkillIds(dto.getSkillIds());
 		demand.setRoleduration(dto.getRoleDuration());
@@ -155,7 +170,7 @@ public class DemandServiceImpl implements DemandService {
 	@Override
 	@Transactional(readOnly = true)
 	public List<DemandResponseDto> listDemands(Long companyId, Long accountId, Long departmentId, String status,
-			Integer page, Integer size) { // Added page and size
+			Integer page, Integer size) {
 		Specification<Demand> spec = (root, query, cb) -> {
 			List<Predicate> predicates = new ArrayList<>();
 			if (companyId != null) {
@@ -185,6 +200,200 @@ public class DemandServiceImpl implements DemandService {
 		return demandPage.getContent().stream().map(demand -> toResponseDto(demand, false)).toList();
 	}
 
+	@Override
+	@Transactional(readOnly = true)
+	public void generateReport(DemandReportRequest req) {
+		if (req.getUserId() == null) {
+			throw new IllegalArgumentException("userId is required to send the report.");
+		}
+
+		List<String> toEmails = Optional.ofNullable(req.getToEmail()).orElse(Collections.emptyList()).stream()
+				.filter(Objects::nonNull).map(String::trim).filter(s -> !s.isBlank()).toList();
+
+		if (toEmails.isEmpty()) {
+			throw new IllegalArgumentException(
+					"toEmail is required and must contain at least one valid email address.");
+		}
+
+		List<String> ccEmails = Optional.ofNullable(req.getCcEmail()).orElse(Collections.emptyList()).stream()
+				.filter(Objects::nonNull).map(String::trim).filter(s -> !s.isBlank()).toList();
+
+		UserAccount user = userAccountRepo.findById(req.getUserId())
+				.orElseThrow(() -> new IllegalArgumentException("User not found: " + req.getUserId()));
+
+		Pageable unpaged = Pageable.unpaged(Sort.by(Sort.Direction.DESC, "demandopendt"));
+
+		Page<GroupFlowDto> pageResult = getDemandFlowList(user.getCompanyId(), req.getAccountId(), null, null,
+				req.getFromDate(), req.getToDate(), unpaged);
+
+		if (pageResult.isEmpty()) {
+
+		}
+
+		List<Map<String, Object>> nestedData = transformDemandToNested(pageResult.getContent());
+
+		String rangeText = buildDateRangeText(req.getFromDate(), req.getToDate());
+		String subject = "Demand Flow Report - " + rangeText;
+
+		String userName = user.getEmail();
+		if (user.getEmployeeId() != null) {
+			Employee e = employeeRepo.findById(user.getEmployeeId()).orElse(null);
+			if (e != null && e.getFirstName() != null && !e.getFirstName().isBlank()) {
+				userName = e.getFirstName();
+			}
+		}
+
+		emailService.sendDemandReportEmailAsync(toEmails, ccEmails, subject, userName, nestedData, rangeText);
+	}
+
+//	private List<Map<String, Object>> transformDemandToNested(List<GroupFlowDto> rows) {
+	private	List<Map<String, Object>> transformDemandToNested(List<GroupFlowDto> rows) {
+		    Map<Long, List<GroupFlowDto>> byGroup = rows.stream()
+		            .collect(Collectors.groupingBy(GroupFlowDto::getGroupId, LinkedHashMap::new, Collectors.toList()));
+
+		    List<Map<String, Object>> out = new ArrayList<>();
+
+		    for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+		        List<GroupFlowDto> groupRows = ge.getValue();
+		        GroupFlowDto g0 = groupRows.stream().findFirst().orElse(null);
+		        if (g0 == null) {
+		            continue;
+		        }
+
+		        // Demand-level info
+		        Map<String, Object> groupInfo = new LinkedHashMap<>();
+		        groupInfo.put("demandId", g0.getGroupId());
+		        groupInfo.put("title", g0.getGroupTitle());
+		        groupInfo.put("description", g0.getDescription());
+		        groupInfo.put("createdAt", g0.getGroupCreatedAt() == null ? null : g0.getGroupCreatedAt().toString());
+		        groupInfo.put("totalRequested", g0.getGroupTotalRequested());
+		        groupInfo.put("status", g0.getGroupStatus());
+		        groupInfo.put("priority", g0.getPriority());
+
+		        groupInfo.put("demandOpenDt", g0.getDemandOpenDt() == null ? "-" : g0.getDemandOpenDt().toString());
+		        groupInfo.put("fulfilmentDt", g0.getFulfilmentDt() == null ? "-" : g0.getFulfilmentDt().toString());
+		        groupInfo.put("actualFulfilmentDt",
+		                g0.getActualFulfilmentDt() == null ? "-" : g0.getActualFulfilmentDt().toString());
+
+		        // Context (company / project / account)
+		        Map<String, Object> contextInfo = new LinkedHashMap<>();
+		        contextInfo.put("companyName", g0.getCompanyName());
+		        contextInfo.put("projectName", g0.getProjectName());
+		        contextInfo.put("accountName", g0.getAccountName());
+
+		        // Status summary (existing + new fields)
+		        Map<String, Object> statusSummary = new LinkedHashMap<>();
+		        statusSummary.put("selected", nvl(g0.getSummarySelected(), 0));
+		        statusSummary.put("allocated", nvl(g0.getSummaryAllocated(), 0));
+		        statusSummary.put("onboarded", nvl(g0.getSummaryOnboarded(), 0));
+
+		        boolean anyResumeShared = false;
+		        boolean anyResumeUploaded = false;
+
+		        int resumeSharedCount = 0;
+		        int resumeRejectedCount = 0;
+		        List<Map<String, Object>> resumeEmployees = new ArrayList<>();
+
+		        Map<Long, List<GroupFlowDto>> byRequest = groupRows.stream()
+		                .filter(r -> r.getRequestId() != null)
+		                .collect(Collectors.groupingBy(GroupFlowDto::getRequestId, LinkedHashMap::new, Collectors.toList()));
+
+		        List<Map<String, Object>> childRequestDetails = new ArrayList<>();
+
+		        for (Map.Entry<Long, List<GroupFlowDto>> re : byRequest.entrySet()) {
+		            Long reqId = re.getKey();
+		            List<GroupFlowDto> reqRows = re.getValue();
+
+		            Map<Long, List<GroupFlowDto>> byInterview = reqRows.stream()
+		                    .filter(r -> r.getInterviewId() != null)
+		                    .collect(Collectors.groupingBy(GroupFlowDto::getInterviewId, LinkedHashMap::new,
+		                            Collectors.toList()));
+
+		            for (Map.Entry<Long, List<GroupFlowDto>> ie : byInterview.entrySet()) {
+		                List<GroupFlowDto> ivRows = ie.getValue();
+		                GroupFlowDto i0 = ivRows.get(0);
+
+		                Map<String, Object> pipelineRow = new LinkedHashMap<>();
+		                pipelineRow.put("demandId", g0.getGroupId());
+		                pipelineRow.put("demandTitle", g0.getGroupTitle());      // NEW: for Section 2
+		                pipelineRow.put("requestId", reqId);
+		                pipelineRow.put("candidateName", i0.getCandidateName());
+		                pipelineRow.put("candidateEmail", i0.getCandidateEmail());
+		                pipelineRow.put("employeeId", i0.getCandidateEmployeeId()); // NEW: for ID+Name display
+
+		                String statusStr = i0.getInterviewOverallStatus();
+		                pipelineRow.put("interviewStatus", statusStr != null ? statusStr : "In Progress");
+
+		                pipelineRow.put("allocated",
+		                        i0.getAllocationId() != null ? "Yes (Alloc #" + i0.getAllocationId() + ")" : "No");
+
+		                boolean isOnboarded = ivRows.stream()
+		                        .anyMatch(x -> "ONBOARDING".equalsIgnoreCase(x.getInterviewLevel())
+		                                && "OnBoarded".equalsIgnoreCase(x.getInterviewLevelStatus()));
+		                pipelineRow.put("onboarded", isOnboarded ? "On Boarded" : "-");
+
+		                String candidateResumeStatus = i0.getCandidateResumeStatus();
+		                pipelineRow.put("resumeStatus",
+		                        candidateResumeStatus != null ? candidateResumeStatus : "Pending");
+
+		                if (candidateResumeStatus != null) {
+		                    anyResumeUploaded = true;
+
+		                    String statusLower = candidateResumeStatus.toLowerCase(Locale.ROOT);
+		                    if (statusLower.contains("shared")) {
+		                        anyResumeShared = true;
+		                        resumeSharedCount++;
+		                    } else if (statusLower.contains("reject")) {
+		                        resumeRejectedCount++;
+		                    }
+
+		                    // Capture employee for Section 1 Employee column
+		                    Long empId = i0.getCandidateEmployeeId();
+		                    String empName = i0.getCandidateName();
+		                    if (empId != null || (empName != null && !empName.isBlank())) {
+		                        Map<String, Object> empMeta = new LinkedHashMap<>();
+		                        empMeta.put("employeeId", empId);
+		                        empMeta.put("employeeName", empName);
+		                        empMeta.put("resumeStatus", candidateResumeStatus);
+		                        resumeEmployees.add(empMeta);
+		                    }
+		                }
+
+		                childRequestDetails.add(pipelineRow);
+		            }
+		        }
+
+		        String resumeSummary = "No Resumes";
+		        if (anyResumeShared) {
+		            resumeSummary = "Shared";
+		        } else if (anyResumeUploaded) {
+		            resumeSummary = "Uploaded";
+		        }
+
+		        statusSummary.put("resumeStatus", resumeSummary);
+		        statusSummary.put("resumeSharedCount", resumeSharedCount);   // NEW
+		        statusSummary.put("resumeRejectedCount", resumeRejectedCount); // NEW
+		        statusSummary.put("resumeEmployees", resumeEmployees);       // NEW
+
+		        List<String> reqIds = byRequest.keySet().stream().map(id -> "#" + id).toList();
+		        statusSummary.put("requestIds", reqIds);
+
+		        Map<String, Object> groupBlock = new LinkedHashMap<>();
+		        groupBlock.put("demandInfo", groupInfo);
+		        groupBlock.put("contextInfo", contextInfo);
+		        groupBlock.put("statusSummary", statusSummary);
+		        groupBlock.put("pipelineRows", childRequestDetails);
+
+		        out.add(groupBlock);
+		    }
+		    return out;
+		}
+
+
+	private static <T> T nvl(T v, T def) {
+		return v == null ? def : v;
+	}
+
 	private DemandResponseDto toResponseDto(Demand demand) {
 		return toResponseDto(demand, false);
 	}
@@ -194,6 +403,7 @@ public class DemandServiceImpl implements DemandService {
 
 		dto.setDemandid(demand.getDemandid());
 		dto.setDemandTitle(demand.getDemandtitle());
+		dto.setDescription(demand.getDescription());
 		dto.setDemandOpenDt(demand.getDemandopendt());
 		dto.setCompanyId(demand.getCompanyId());
 		dto.setAccountId(demand.getAccountId());
@@ -202,7 +412,19 @@ public class DemandServiceImpl implements DemandService {
 		dto.setRequesterUserId(demand.getRequesterUserId());
 		dto.setYearsofexp(demand.getYearsofexp());
 		dto.setSkillIds(demand.getSkillIds());
+
 		dto.setFulfilmentDt(demand.getFulfilmentdt());
+		dto.setActualFulfilmentDt(demand.getActualFulfilmentDt());
+
+		LocalDate target = demand.getFulfilmentdt();
+		LocalDate actual = dto.getActualFulfilmentDt();
+
+		if (actual != null && target != null) {
+			dto.setFulfilledWithinTarget(!actual.isAfter(target));
+		} else {
+			dto.setFulfilledWithinTarget(false);
+		}
+
 		dto.setRoleDuration(demand.getRoleduration());
 		dto.setLocationType(demand.getLocationType());
 		dto.setWorkLocPref(demand.getWorklocpref());
@@ -212,7 +434,11 @@ public class DemandServiceImpl implements DemandService {
 		dto.setCreateddt(demand.getCreateddt());
 		dto.setUpdateddt(demand.getUpdateddt());
 		dto.setResourceRequestsCount(demand.getResourceRequestsCount());
-		dto.setPendingDays(ChronoUnit.DAYS.between(demand.getCreateddt().toLocalDate(), LocalDate.now()));
+		if (demand.getCreateddt() != null) {
+			dto.setPendingDays(ChronoUnit.DAYS.between(demand.getCreateddt().toLocalDate(), LocalDate.now()));
+		} else {
+			dto.setPendingDays(0);
+		}
 
 		companyRepo.findById(demand.getCompanyId()).ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
 		accountRepo.findById(demand.getAccountId()).ifPresent(a -> {
@@ -237,17 +463,29 @@ public class DemandServiceImpl implements DemandService {
 		DemandStageCountsDto stageCounts = new DemandStageCountsDto();
 		stageCounts.setTotal(childRequests.size());
 
-		int completedOrRejectedCount = 0;
 		LocalDate lastFulfilmentDate = null;
+		int completedOrRejectedCount = 0;
 
 		for (ResourceRequest req : childRequests) {
 			DemandRequestSummaryDto summaryItem = new DemandRequestSummaryDto();
 			summaryItem.setRequestId(req.getRequestId());
 
-			OffsetDateTime lastUpdate = req.getSubmittedDate() != null
-					? req.getSubmittedDate().atStartOfDay().atOffset(OffsetDateTime.now().getOffset())
-					: demand.getCreateddt();
-			summaryItem.setPendingDays(ChronoUnit.DAYS.between(lastUpdate.toLocalDate(), LocalDate.now()));
+			OffsetDateTime lastUpdate = null;
+
+			if (req.getSubmittedDate() != null) {
+				lastUpdate = req.getSubmittedDate().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+			} else if (demand.getCreateddt() != null) {
+				lastUpdate = demand.getCreateddt();
+			} else if (demand.getDemandopendt() != null) {
+
+				lastUpdate = demand.getDemandopendt().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+			}
+
+			if (lastUpdate != null) {
+				summaryItem.setPendingDays(ChronoUnit.DAYS.between(lastUpdate.toLocalDate(), LocalDate.now()));
+			} else {
+				summaryItem.setPendingDays(0);
+			}
 
 			boolean isFinalState = false;
 
@@ -335,10 +573,18 @@ public class DemandServiceImpl implements DemandService {
 			if (completedOrRejectedCount == demand.getResourceRequestsCount()
 					&& demand.getResourceRequestsCount() > 0) {
 				dto.setOverallStatus("Completed");
-				dto.setFulfilmentDt(lastFulfilmentDate != null ? lastFulfilmentDate : LocalDate.now());
-
 				demand.setOverallStatus("Completed");
-				demand.setFulfilmentdt(dto.getFulfilmentDt());
+
+				if (lastFulfilmentDate != null) {
+					demand.setActualFulfilmentDt(lastFulfilmentDate);
+					dto.setActualFulfilmentDt(lastFulfilmentDate);
+
+					if (demand.getFulfilmentdt() != null) {
+						dto.setFulfilledWithinTarget(!lastFulfilmentDate.isAfter(demand.getFulfilmentdt()));
+					}
+				} else {
+				}
+
 				demandRepo.save(demand);
 			} else {
 				dto.setOverallStatus("Pending");
@@ -470,67 +716,96 @@ public class DemandServiceImpl implements DemandService {
 			Long demandId = entry.getKey();
 			List<ResourceRequest> requests = entry.getValue();
 
-			int open = 0, interviewing = 0, selected = 0, allocated = 0, onboarded = 0, rejected = 0;
+			int open = 0;
+			int interviewing = 0;
+			int selected = 0;
+			int allocated = 0;
+			int onboarded = 0;
+			int rejected = 0;
 			int totalInterviewsCount = 0;
 
 			for (ResourceRequest req : requests) {
-				List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(req.getRequestId(), List.of());
+				Long reqId = req.getRequestId();
+				List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(reqId, List.of());
 				totalInterviewsCount += reqInterviews.size();
 
-				String status = "Open";
+				boolean hasAnyInterview = !reqInterviews.isEmpty();
+				Allocation reqAlloc = allocByReqMap.get(reqId);
+				boolean hasAllocation = (reqAlloc != null);
 
-				if (allocByReqMap.containsKey(req.getRequestId())) {
-					boolean isOnboarded = reqInterviews.stream()
-							.flatMap(i -> readProgress(i.getLevelProgress()).stream())
-							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel())
-									&& "OnBoarded".equalsIgnoreCase(lp.getStatus()));
+				Interview latestInterview = reqInterviews.isEmpty() ? null
+						: reqInterviews.stream().max(Comparator.comparing(Interview::getInterviewId,
+								Comparator.nullsLast(Comparator.naturalOrder()))).orElse(null);
 
-					if (isOnboarded) {
-						status = "Onboarded";
-					} else {
-						status = "Allocated";
+				boolean anySelectedForRequest = false;
+				boolean anyOnboardedForRequest = false;
+				boolean anyRejectedInterview = false;
+
+				if (latestInterview != null) {
+					String st = latestInterview.getStatus();
+					if ("Selected".equalsIgnoreCase(st)) {
+						anySelectedForRequest = true;
+					} else if ("Rejected".equalsIgnoreCase(st)) {
+						anyRejectedInterview = true;
 					}
-				} else {
-					if (reqInterviews.stream().anyMatch(i -> "Selected".equalsIgnoreCase(i.getStatus()))) {
-						status = "Selected";
-					} else if (reqInterviews.stream().anyMatch(i -> "Rejected".equalsIgnoreCase(i.getStatus()))) {
-						status = "Rejected";
-					} else if (!reqInterviews.isEmpty()) {
-						status = "Interviewing";
+
+					List<LevelProgressDto> latestLevels = readProgress(latestInterview.getLevelProgress());
+					anyOnboardedForRequest = latestLevels.stream()
+							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && lp.getStatus() != null
+									&& lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+				}
+
+				boolean isRejectedReq = "Rejected".equalsIgnoreCase(req.getStatus())
+						|| "Cancelled".equalsIgnoreCase(req.getStatus());
+
+				if (hasAllocation) {
+					allocated++;
+				}
+
+				boolean isFinalPositive = anySelectedForRequest || anyOnboardedForRequest || hasAllocation;
+				boolean isFinalNegative = anyRejectedInterview || isRejectedReq;
+
+				if (!isFinalPositive && isFinalNegative) {
+					rejected++;
+				}
+
+				if (!isFinalPositive && !isFinalNegative) {
+					if (hasAnyInterview) {
+						interviewing++;
 					} else {
-						if ("Rejected".equalsIgnoreCase(req.getStatus())
-								|| "Cancelled".equalsIgnoreCase(req.getStatus())) {
-							status = "Rejected";
-						}
+						open++;
 					}
 				}
 
-				switch (status) {
-				case "Onboarded":
-					onboarded++;
-					break;
-				case "Allocated":
-					allocated++;
-					break;
-				case "Selected":
-					selected++;
-					break;
-				case "Interviewing":
-					interviewing++;
-					break;
-				case "Rejected":
-					rejected++;
-					break;
-				default:
-					open++;
-					break;
+				for (Interview iv : reqInterviews) {
+					boolean interviewSelected = "Selected".equalsIgnoreCase(iv.getStatus());
+
+					List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+					boolean interviewOnboarded = levels.stream()
+							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && lp.getStatus() != null
+									&& lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+
+					boolean allocationForThisCandidate = false;
+					if (reqAlloc != null && iv.getEmployeeId() != null) {
+						allocationForThisCandidate = Objects.equals(reqAlloc.getEmployeeId(), iv.getEmployeeId());
+					}
+
+					if (interviewOnboarded || allocationForThisCandidate) {
+						onboarded++;
+					}
+
+					if (interviewSelected || interviewOnboarded || allocationForThisCandidate) {
+						selected++;
+					}
 				}
 			}
+
 			summaryMap.put(demandId,
 					Map.of("totalRequests", requests.size(), "open", open, "interviewing", interviewing, "selected",
 							selected, "allocated", allocated, "onboarded", onboarded, "rejected", rejected,
 							"totalInterviews", totalInterviewsCount));
 		}
+
 		return summaryMap;
 	}
 
@@ -552,21 +827,32 @@ public class DemandServiceImpl implements DemandService {
 		baseRow.setDemandOpenDt(demand.getDemandopendt());
 		baseRow.setPriority(demand.getPriority());
 		baseRow.setRoleDuration(demand.getRoleduration());
-		LocalDate fulfilmentDt = null;
+		baseRow.setDescription(demand.getDescription());
+		baseRow.setFulfilmentDt(demand.getFulfilmentdt());
+		baseRow.setActualFulfilmentDt(demand.getActualFulfilmentDt());
 
-		for (ResourceRequest req : childRequests) {
-			Allocation alloc = allocByReqMap.get(req.getRequestId());
-			if (alloc != null && alloc.getStartDate() != null) {
-				if (fulfilmentDt == null || alloc.getStartDate().isAfter(fulfilmentDt)) {
-					fulfilmentDt = alloc.getStartDate();
+		if (demand.getActualFulfilmentDt() != null && demand.getFulfilmentdt() != null) {
+			baseRow.setFulfilledWithinTarget(!demand.getActualFulfilmentDt().isAfter(demand.getFulfilmentdt()));
+		} else {
+			baseRow.setFulfilledWithinTarget(false);
+		}
+		baseRow.setGroupCreatorUserId(demand.getRequesterUserId());
+		if (demand.getRequesterUserId() != null) {
+			UserAccount ua = userMap.get(demand.getRequesterUserId());
+			if (ua != null) {
+				baseRow.setGroupCreatorEmail(ua.getEmail());
+				if (ua.getEmployeeId() != null) {
+					Employee e = employeeMap.get(ua.getEmployeeId());
+					if (e != null) {
+						baseRow.setGroupCreatorName(e.getFirstName() + " " + e.getLastName());
+					}
+				}
+
+				if (baseRow.getGroupCreatorName() == null) {
+					baseRow.setGroupCreatorName(ua.getEmail());
 				}
 			}
 		}
-
-		if (fulfilmentDt == null) {
-			fulfilmentDt = demand.getFulfilmentdt();
-		}
-		baseRow.setFulfilmentDt(fulfilmentDt);
 		baseRow.setCompanyId(demand.getCompanyId());
 		companyMap.computeIfPresent(demand.getCompanyId(), (k, v) -> {
 			baseRow.setCompanyName(v.getCompanyName());
@@ -704,6 +990,7 @@ public class DemandServiceImpl implements DemandService {
 		copy.setGroupCreatedAt(base.getGroupCreatedAt());
 		copy.setGroupTotalRequested(base.getGroupTotalRequested());
 		copy.setGroupStatus(base.getGroupStatus());
+
 		copy.setGroupCreatorUserId(base.getGroupCreatorUserId());
 		copy.setGroupCreatorName(base.getGroupCreatorName());
 		copy.setGroupCreatorEmail(base.getGroupCreatorEmail());
@@ -716,9 +1003,11 @@ public class DemandServiceImpl implements DemandService {
 		copy.setAccountName(base.getAccountName());
 		copy.setDemandOpenDt(base.getDemandOpenDt());
 		copy.setFulfilmentDt(base.getFulfilmentDt());
+		copy.setActualFulfilmentDt(base.getActualFulfilmentDt());
+		copy.setFulfilledWithinTarget(base.getFulfilledWithinTarget());
 		copy.setPriority(base.getPriority());
 		copy.setRoleDuration(base.getRoleDuration());
-
+		copy.setDescription(base.getDescription());
 		copy.setSummaryTotalRequests(base.getSummaryTotalRequests());
 		copy.setSummaryOpen(base.getSummaryOpen());
 		copy.setSummaryInterviewing(base.getSummaryInterviewing());
@@ -757,6 +1046,27 @@ public class DemandServiceImpl implements DemandService {
 		copy.setInterviewerEmail(base.getInterviewerEmail());
 
 		return copy;
+	}
+
+	private String buildDateRangeText(String fromDate, String toDate) {
+		LocalDate start = parseFlexibleDate(fromDate);
+		LocalDate end = parseFlexibleDate(toDate);
+
+		if (start != null && end != null) {
+			if (start.equals(end)) {
+
+				return start.toString();
+			}
+
+			return start.toString() + " to " + end.toString();
+		}
+		if (start != null) {
+			return start.toString() + " to End";
+		}
+		if (end != null) {
+			return "Start to " + end.toString();
+		}
+		return "All Time";
 	}
 
 	private LocalDate parseFlexibleDate(String dateStr) {

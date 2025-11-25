@@ -44,9 +44,15 @@ public class Demand {
 	@Column(name = "demandtitle", nullable = false)
 	private String demandtitle;
 
-	@CreationTimestamp 
+	@Column(name = "description", columnDefinition = "TEXT")
+	private String description;
+
+	@CreationTimestamp
 	@Column(name = "demandopendt", nullable = false, updatable = false)
 	private LocalDate demandopendt;
+
+	@Column(name = "actual_fulfilment_dt")
+	private LocalDate actualFulfilmentDt;
 
 	@Column(name = "project_name")
 	private String projectName;
@@ -54,7 +60,7 @@ public class Demand {
 	@Column(name = "yearsofexp", length = 50)
 	private String yearsofexp;
 
-	@JdbcTypeCode(SqlTypes.ARRAY) 
+	@JdbcTypeCode(SqlTypes.ARRAY)
 	@Column(name = "skill_ids", columnDefinition = "bigint[]")
 	private List<Long> skillIds;
 
@@ -85,7 +91,6 @@ public class Demand {
 	@CreationTimestamp
 	@Column(name = "createddt", nullable = false, updatable = false)
 	private OffsetDateTime createddt;
-
 
 	@Column(name = "updateddt")
 	private OffsetDateTime updateddt;

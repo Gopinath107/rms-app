@@ -11,7 +11,6 @@ import java.util.List;
 public class ResourceRequestDto {
 	private Long requestId;
 
-	
 	private Long projectId;
 	private String projectName;
 	private Long companyId;
@@ -49,5 +48,7 @@ public class ResourceRequestDto {
 
 	private Long groupId;
 	private Long demandId;
+	private String demandTitle;
+	private String demandDescription;
 	private Long daysPending;
 }

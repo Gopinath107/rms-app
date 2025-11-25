@@ -21,8 +21,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ris.rms.dto.DemandCreateDto;
+import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.GroupFlowDto;
+import com.ris.rms.dto.MatchResponseDto;
+import com.ris.rms.service.DemandMatchingService;
 import com.ris.rms.service.DemandService;
 
 import jakarta.validation.Valid;
@@ -34,6 +37,54 @@ import lombok.RequiredArgsConstructor;
 public class DemandController {
 
 	private final DemandService demandService;
+	private final DemandMatchingService matchingService;
+
+	@GetMapping("/{id}/matches")
+	public ResponseEntity<Map<String, Object>> findMatches(@PathVariable Long id) {
+		Map<String, Object> resp = new LinkedHashMap<>();
+		try {
+			Map<String, Object> result = matchingService.findMatchesForDemand(id);
+
+			resp.put("success", true);
+			resp.put("result", result);
+			resp.put("errors", List.of());
+			resp.put("errorCount", 0);
+
+			return ResponseEntity.ok(resp);
+		} catch (IllegalArgumentException e) {
+			resp.put("success", false);
+			resp.put("result", null);
+			resp.put("errors", List.of(e.getMessage()));
+			resp.put("errorCount", 1);
+			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(resp);
+		} catch (Exception e) {
+			resp.put("success", false);
+			resp.put("result", null);
+			resp.put("errors", List.of("Failed to find matches for demand"));
+			resp.put("errorCount", 1);
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(resp);
+		}
+	}
+
+	@PostMapping("/generateEmail")
+	public ResponseEntity<Map<String, Object>> generateReportEmail(@RequestBody DemandReportRequest request) {
+		Map<String, Object> resp = new LinkedHashMap<>();
+		try {
+			demandService.generateReport(request);
+
+			resp.put("result", "Report generation initiated. Email will be sent to the specified recipients.");
+			resp.put("success", true);
+			resp.put("errors", List.of());
+			resp.put("errorCount", 0);
+			return ResponseEntity.ok(resp);
+		} catch (Exception e) {
+			resp.put("result", null);
+			resp.put("success", false);
+			resp.put("errors", List.of(e.getMessage()));
+			resp.put("errorCount", 1);
+			return ResponseEntity.badRequest().body(resp);
+		}
+	}
 
 	@PostMapping("/create")
 	public ResponseEntity<Map<String, Object>> createDemand(@Valid @RequestBody DemandCreateDto dto) {
@@ -139,9 +190,26 @@ public class DemandController {
 			if (g0 == null)
 				continue;
 
+			boolean anyShared = groupRows.stream().anyMatch(r -> r.getCandidateResumeStatus() != null
+					&& "Shared".equalsIgnoreCase(r.getCandidateResumeStatus()));
+
+			boolean anyRejected = groupRows.stream().anyMatch(r -> r.getCandidateResumeStatus() != null
+					&& "Rejected".equalsIgnoreCase(r.getCandidateResumeStatus()));
+
+			String resumeShareStatus;
+			if (anyShared) {
+				resumeShareStatus = "Shared";
+			} else if (anyRejected) {
+				resumeShareStatus = "Rejected";
+			} else {
+
+				resumeShareStatus = "No Resumes";
+			}
+
 			Map<String, Object> groupInfo = new LinkedHashMap<>();
 			groupInfo.put("demandId", g0.getGroupId());
 			groupInfo.put("title", g0.getGroupTitle());
+			groupInfo.put("description", g0.getDescription());
 			groupInfo.put("createdAt", g0.getGroupCreatedAt() == null ? null : g0.getGroupCreatedAt().toString());
 			groupInfo.put("totalRequested", g0.getGroupTotalRequested());
 			groupInfo.put("status", g0.getGroupStatus());
@@ -151,7 +219,9 @@ public class DemandController {
 			groupInfo.put("priority", g0.getPriority());
 			groupInfo.put("demandOpenDt", g0.getDemandOpenDt() == null ? null : g0.getDemandOpenDt().toString());
 			groupInfo.put("fulfilmentDt", g0.getFulfilmentDt() == null ? null : g0.getFulfilmentDt().toString());
-
+			groupInfo.put("actualFulfilmentDt",
+					g0.getActualFulfilmentDt() == null ? null : g0.getActualFulfilmentDt().toString());
+			groupInfo.put("fulfilledWithinTarget", g0.getFulfilledWithinTarget());
 			groupInfo.put("roleDuration", g0.getRoleDuration());
 
 			Map<String, Object> contextInfo = new LinkedHashMap<>();
@@ -168,10 +238,11 @@ public class DemandController {
 			statusSummary.put("interviewing", nvl(g0.getSummaryInterviewing(), 0));
 			statusSummary.put("selected", nvl(g0.getSummarySelected(), 0));
 			statusSummary.put("allocated", nvl(g0.getSummaryAllocated(), 0));
-			statusSummary.put("onboarded", nvl(g0.getSummaryOnboarded(), 0)); 
+			statusSummary.put("onboarded", nvl(g0.getSummaryOnboarded(), 0));
 			statusSummary.put("rejected", nvl(g0.getSummaryRejected(), 0));
 			statusSummary.put("totalInterviews", nvl(g0.getSummaryTotalInterviews(), 0));
 			statusSummary.put("pendingDays", nvl(g0.getSummaryPendingDays(), 0L));
+			statusSummary.put("resumeShareStatus", resumeShareStatus);
 
 			Map<Long, List<GroupFlowDto>> byRequest = groupRows.stream().filter(r -> r.getRequestId() != null).collect(
 					Collectors.groupingBy(GroupFlowDto::getRequestId, LinkedHashMap::new, Collectors.toList()));

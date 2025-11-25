@@ -1,16 +1,25 @@
 package com.ris.rms.service.impl;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+
+import jakarta.annotation.PostConstruct;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -24,6 +33,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.ris.rms.dto.InterviewDto;
 import com.ris.rms.dto.LevelProgressDto;
+import com.ris.rms.entity.Account;
 import com.ris.rms.entity.Interview;
 import com.ris.rms.entity.Project;
 import com.ris.rms.entity.ResourceRequest;
@@ -44,7 +54,6 @@ import com.ris.rms.service.EmailService;
 import com.ris.rms.service.InterviewService;
 import com.ris.rms.service.NotificationService;
 
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -66,17 +75,15 @@ public class InterviewServiceImpl implements InterviewService {
 	private final ResReqGroupRepository groupRepo;
 	private final StatusMasterRepository statusMasterRepo;
 
-	private final ObjectMapper om = new ObjectMapper().registerModule(new JavaTimeModule())
+	private static final ObjectMapper OM = new ObjectMapper().registerModule(new JavaTimeModule())
 			.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
 	private static final Set<String> ALLOWED_LEVELS = Set.of("L1", "L2", "L3", "HR", "Managerial");
-	private static final java.time.format.DateTimeFormatter OUT_FMT = java.time.format.DateTimeFormatter
-			.ofPattern("dd-MM-uuuu HH-mm");
-	private static final java.time.format.DateTimeFormatter IN_FMT_DASH = java.time.format.DateTimeFormatter
-			.ofPattern("dd-MM-uuuu HH-mm");
-	private static final java.time.format.DateTimeFormatter IN_FMT_COLON = java.time.format.DateTimeFormatter
-			.ofPattern("dd-MM-uuuu HH:mm");
 	private static final String META_LEVEL = "__META__";
+
+	private static final DateTimeFormatter FMT_DASH = DateTimeFormatter.ofPattern("dd-MM-uuuu HH-mm");
+	private static final DateTimeFormatter FMT_COLON = DateTimeFormatter.ofPattern("dd-MM-uuuu HH:mm");
+	private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
 	private Set<String> finalInterviewStates;
 
@@ -84,12 +91,17 @@ public class InterviewServiceImpl implements InterviewService {
 	public InterviewDto createBatchNoInterviewer(InterviewDto dto) {
 		validateCreate(dto);
 		requireEmployee(dto.getEmployeeId());
-		validateEmployeeAvailability(dto.getEmployeeId());
+
+		validateEmployeeAvailability(dto.getEmployeeId(), dto.getRequestId());
+
+		OffsetDateTime when = resolveScheduledAt(dto);
+
+		validateTimeSlotAvailability(dto.getEmployeeId(), when, null);
+
 		ResourceRequest rr = requireRequest(dto.getRequestId());
 		Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 		requireAllowedLevels(dto.getInterviewLevels());
 
-		OffsetDateTime when = resolveScheduledAt(dto);
 		List<String> plannedLevels = dto.getInterviewLevels() == null ? List.of() : dto.getInterviewLevels();
 		List<LevelProgressDto> progress = buildProgress(plannedLevels, dto.getLevelProgress(), dto.getCreatedByUserId(),
 				false);
@@ -100,9 +112,7 @@ public class InterviewServiceImpl implements InterviewService {
 
 		Interview saved = repo.save(entity);
 
-		String accountName = proj != null && proj.getAccountId() != null
-				? accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null)
-				: null;
+		String accountName = resolveAccountName(proj, rr.getDemandId());
 
 		notifyOnCreateOrUpdateEmails(saved, proj, accountName, EmailService.MailAction.CREATED, progress);
 		return enrich(buildCreateOrUpdateResponse(saved));
@@ -112,7 +122,13 @@ public class InterviewServiceImpl implements InterviewService {
 	public InterviewDto create(InterviewDto dto) {
 		validateCreate(dto);
 		requireEmployee(dto.getEmployeeId());
-		validateEmployeeAvailability(dto.getEmployeeId());
+
+		validateEmployeeAvailability(dto.getEmployeeId(), dto.getRequestId());
+
+		OffsetDateTime when = resolveScheduledAt(dto);
+
+		validateTimeSlotAvailability(dto.getEmployeeId(), when, null);
+
 		ResourceRequest rr = requireRequest(dto.getRequestId());
 		Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 
@@ -125,16 +141,8 @@ public class InterviewServiceImpl implements InterviewService {
 
 		requireAllowedLevels(dto.getInterviewLevels());
 
-		String accountName = null;
-		if (proj != null && proj.getAccountId() != null) {
-			accountName = accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null);
-		} else if (rr.getDemandId() != null) {
-			accountName = demandRepo.findById(rr.getDemandId())
-					.flatMap(d -> d.getAccountId() == null ? Optional.empty() : accountRepo.findById(d.getAccountId()))
-					.map(a -> a.getAccountName()).orElse(null);
-		}
+		String accountName = resolveAccountName(proj, rr.getDemandId());
 
-		OffsetDateTime when = resolveScheduledAt(dto);
 		List<LevelProgressDto> progress = buildProgress(dto.getInterviewLevels(), dto.getLevelProgress(),
 				dto.getInterviewerUserId(), true);
 
@@ -198,8 +206,10 @@ public class InterviewServiceImpl implements InterviewService {
 		requireAllowedLevels(dto.getInterviewLevels());
 
 		OffsetDateTime when = resolveScheduledAt(dto);
-		if (when != null)
+		if (when != null) {
+			validateTimeSlotAvailability(existing.getEmployeeId(), when, existing.getInterviewId());
 			existing.setScheduledAt(when);
+		}
 
 		if (StringUtils.hasText(dto.getFeedback())) {
 			String prev = existing.getNotes();
@@ -296,43 +306,12 @@ public class InterviewServiceImpl implements InterviewService {
 		ResourceRequest rr = requireRequest(requestId);
 		Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 
-		String accountName = null;
-		if (proj != null && proj.getAccountId() != null) {
-			accountName = accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null);
-		} else if (rr.getDemandId() != null) {
-			accountName = demandRepo.findById(rr.getDemandId())
-					.flatMap(d -> d.getAccountId() == null ? Optional.empty() : accountRepo.findById(d.getAccountId()))
-					.map(a -> a.getAccountName()).orElse(null);
-		}
+		String accountName = resolveAccountName(proj, rr.getDemandId());
 
 		notifyOnCreateOrUpdateEmails(saved, proj, accountName, EmailService.MailAction.UPDATED,
 				readProgress(saved.getLevelProgress()));
 
 		return sanitizeForClient(enrich(buildCreateOrUpdateResponse(saved)));
-	}
-
-	private void validateSequentialProgress(String targetLevel, List<String> plannedOrder,
-			List<LevelProgressDto> currentProgress) {
-		if (plannedOrder == null || plannedOrder.isEmpty())
-			return;
-
-		int targetIndex = plannedOrder.indexOf(targetLevel);
-		if (targetIndex <= 0)
-			return;
-		String prevLevelName = plannedOrder.get(targetIndex - 1);
-
-		Optional<LevelProgressDto> prevRow = findRow(currentProgress, prevLevelName);
-
-		if (prevRow.isEmpty()) {
-			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
-					+ prevLevelName + " has not been started.");
-		}
-
-		String prevStatus = prevRow.get().getStatus();
-		if (!"Selected".equalsIgnoreCase(prevStatus)) {
-			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
-					+ prevLevelName + " is not 'Selected' (Current status: " + prevStatus + ").");
-		}
 	}
 
 	@Override
@@ -356,15 +335,11 @@ public class InterviewServiceImpl implements InterviewService {
 
 		try {
 			ResourceRequest rr = requireRequest(requestId);
-
 			Project proj = rr.getProjectId() != null ? requireProject(rr.getProjectId()) : null;
 
-			String accountName = (proj != null && proj.getAccountId() != null)
-					? accountRepo.findById(proj.getAccountId()).map(a -> a.getAccountName()).orElse(null)
-					: null;
+			String accountName = resolveAccountName(proj, rr.getDemandId());
 
 			String projectName = (proj != null) ? proj.getProjectName() : null;
-
 			if (projectName == null && rr.getDemandId() != null) {
 				projectName = demandRepo.findById(rr.getDemandId()).map(d -> d.getProjectName()).orElse(null);
 			}
@@ -399,7 +374,6 @@ public class InterviewServiceImpl implements InterviewService {
 				if (r.getInterviewerUserId() != null)
 					uniqueInterviewers.add(r.getInterviewerUserId());
 
-			List<CompletableFuture<Boolean>> futures = new ArrayList<>();
 			for (Long uid : uniqueInterviewers) {
 				UserAccount intr = userAccountRepo.findById(uid).orElse(null);
 				if (intr == null || intr.getEmail() == null || intr.getEmail().isBlank())
@@ -408,9 +382,8 @@ public class InterviewServiceImpl implements InterviewService {
 				String interviewerName = resolveInterviewerDisplayName(intr);
 				String candName = (employeeName != null ? employeeName : "Employee");
 
-				futures.add(
-						emailService.sendInterviewerNotificationMailAsync(intr.getEmail(), safeProjectName, accountName,
-								interviewerName, candName, typeDisplay, whenRaw, EmailService.MailAction.CANCELLED));
+				emailService.sendInterviewerNotificationMailAsync(intr.getEmail(), safeProjectName, accountName,
+						interviewerName, candName, typeDisplay, whenRaw, EmailService.MailAction.CANCELLED);
 			}
 
 		} catch (Exception e) {
@@ -559,6 +532,20 @@ public class InterviewServiceImpl implements InterviewService {
 
 		Interview saved = repo.save(iv);
 		return sanitizeForClient(enrich(buildCreateOrUpdateResponse(saved)));
+	}
+
+	private String resolveAccountName(Project proj, Long demandId) {
+		String accountName = null;
+		if (proj != null && proj.getAccountId() != null) {
+			accountName = accountRepo.findById(proj.getAccountId()).map(Account::getAccountName).orElse(null);
+		}
+
+		if (accountName == null && demandId != null) {
+			accountName = demandRepo.findById(demandId)
+					.flatMap(d -> d.getAccountId() == null ? Optional.empty() : accountRepo.findById(d.getAccountId()))
+					.map(Account::getAccountName).orElse(null);
+		}
+		return accountName;
 	}
 
 	private ResourceRequest requireRequest(Long requestId) {
@@ -968,7 +955,7 @@ public class InterviewServiceImpl implements InterviewService {
 		try {
 			if (json == null || json.isBlank())
 				return new ArrayList<>();
-			return om.readValue(json, new TypeReference<List<LevelProgressDto>>() {
+			return OM.readValue(json, new TypeReference<List<LevelProgressDto>>() {
 			});
 		} catch (Exception e) {
 			return new ArrayList<>();
@@ -977,7 +964,7 @@ public class InterviewServiceImpl implements InterviewService {
 
 	private String writeProgress(List<LevelProgressDto> rows) {
 		try {
-			return om.writeValueAsString(rows == null ? List.of() : rows);
+			return OM.writeValueAsString(rows == null ? List.of() : rows);
 		} catch (Exception e) {
 			throw new IllegalArgumentException("Failed to serialize level progress");
 		}
@@ -996,20 +983,20 @@ public class InterviewServiceImpl implements InterviewService {
 		if (txt == null || txt.isBlank())
 			return null;
 		try {
-			var ld = java.time.LocalDateTime.parse(txt, IN_FMT_DASH);
-			return ld.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+			var ld = LocalDateTime.parse(txt, FMT_DASH);
+			return ld.atZone(ZoneId.systemDefault()).toOffsetDateTime();
 		} catch (Exception ignore) {
 		}
 		try {
-			var ld = java.time.LocalDateTime.parse(txt, IN_FMT_COLON);
-			return ld.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+			var ld = LocalDateTime.parse(txt, FMT_COLON);
+			return ld.atZone(ZoneId.systemDefault()).toOffsetDateTime();
 		} catch (Exception ignore) {
 		}
 		return OffsetDateTime.parse(txt);
 	}
 
 	private String fmt(OffsetDateTime odt) {
-		return odt == null ? null : OUT_FMT.format(odt);
+		return odt == null ? null : FMT_DASH.format(odt);
 	}
 
 	private String computeOverall(List<LevelProgressDto> rows) {
@@ -1034,8 +1021,8 @@ public class InterviewServiceImpl implements InterviewService {
 		return "Pending";
 	}
 
-	private void validateEmployeeAvailability(Long employeeId) {
-		if (employeeId == null) {
+	private void validateEmployeeAvailability(Long employeeId, Long currentRequestId) {
+		if (employeeId == null || currentRequestId == null) {
 			return;
 		}
 
@@ -1045,22 +1032,79 @@ public class InterviewServiceImpl implements InterviewService {
 		}
 
 		for (Interview interview : existingInterviews) {
-			String status = interview.getStatus();
 
+			if (interview.getRequestId().equals(currentRequestId)) {
+				String status = interview.getStatus();
+
+				boolean isActive = (status == null) || !this.finalInterviewStates.contains(status.toUpperCase());
+
+				if (isActive) {
+					throw new IllegalArgumentException(
+							"This employee already has an active interview for this specific Request #"
+									+ currentRequestId + " (Current Status: " + (status != null ? status : "Pending")
+									+ "). "
+									+ "You cannot schedule another interview for the same request until the existing one is completed or rejected.");
+				}
+			}
+		}
+	}
+
+	private void validateTimeSlotAvailability(Long employeeId, OffsetDateTime newScheduledAt, Long excludeInterviewId) {
+		if (employeeId == null || newScheduledAt == null) {
+			return;
+		}
+
+		List<Interview> existingInterviews = repo.findAllByEmployeeIdOrderByScheduledAtDesc(employeeId);
+
+		for (Interview interview : existingInterviews) {
+			if (excludeInterviewId != null && interview.getInterviewId().equals(excludeInterviewId)) {
+				continue;
+			}
+
+			String status = interview.getStatus();
 			boolean isActive = (status == null) || !this.finalInterviewStates.contains(status.toUpperCase());
 
-			if (isActive) {
+			if (isActive && interview.getScheduledAt() != null) {
+				long diffMinutes = Duration.between(interview.getScheduledAt(), newScheduledAt).abs().toMinutes();
+				if (diffMinutes < 60) {
+					String prettyDate = FMT_COLON.format(interview.getScheduledAt().atZoneSameInstant(IST));
 
-				throw new IllegalArgumentException("This employee is already in an active interview (Status: "
-						+ (status != null ? status : "Pending") + ", RequestID: " + interview.getRequestId()
-						+ "). They cannot be scheduled for a new interview until the existing one is completed, rejected, or cancelled.");
+					throw new IllegalArgumentException(
+							"Time slot conflict: Employee already has an active interview scheduled at " + prettyDate
+									+ " (Interview ID: " + interview.getInterviewId()
+									+ "). Please choose a time at least 1 hour apart.");
+				}
 			}
+		}
+	}
+
+	private void validateSequentialProgress(String targetLevel, List<String> plannedOrder,
+			List<LevelProgressDto> currentProgress) {
+		if (plannedOrder == null || plannedOrder.isEmpty())
+			return;
+
+		int targetIndex = plannedOrder.indexOf(targetLevel);
+		if (targetIndex <= 0)
+			return;
+		String prevLevelName = plannedOrder.get(targetIndex - 1);
+
+		Optional<LevelProgressDto> prevRow = findRow(currentProgress, prevLevelName);
+
+		if (prevRow.isEmpty()) {
+			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
+					+ prevLevelName + " has not been started.");
+		}
+
+		String prevStatus = prevRow.get().getStatus();
+		if (!"Selected".equalsIgnoreCase(prevStatus)) {
+			throw new IllegalArgumentException("Cannot schedule " + targetLevel + " because the previous round "
+					+ prevLevelName + " is not 'Selected' (Current status: " + prevStatus + ").");
 		}
 	}
 
 	@PostConstruct
 	public void initializeFinalInterviewStates() {
-		Set<String> finalStates = new java.util.HashSet<>();
+		Set<String> finalStates = new HashSet<>();
 		finalStates.add("CANCELLED");
 		finalStates.add("NOSHOW");
 
@@ -1082,7 +1126,7 @@ public class InterviewServiceImpl implements InterviewService {
 			finalStates.add("REJECTED");
 		}
 
-		this.finalInterviewStates = java.util.Collections.unmodifiableSet(finalStates);
+		this.finalInterviewStates = Collections.unmodifiableSet(finalStates);
 		System.out.println("Initialized Final Interview States: " + this.finalInterviewStates);
 	}
 }

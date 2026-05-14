@@ -1,0 +1,1555 @@
+package com.ris.rms.service.impl;
+
+import java.io.ByteArrayOutputStream;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.IndexedColors;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.VerticalAlignment;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.ris.rms.dto.DemandCreateDto;
+import com.ris.rms.dto.DemandReportRequest;
+import com.ris.rms.dto.DemandRequestSummaryDto;
+import com.ris.rms.dto.DemandResponseDto;
+import com.ris.rms.dto.DemandStageCountsDto;
+import com.ris.rms.dto.GroupFlowDto;
+import com.ris.rms.dto.LevelProgressDto;
+import com.ris.rms.dto.ResourceRequestDto;
+import com.ris.rms.dto.ResumeShareDto;
+import com.ris.rms.entity.Account;
+import com.ris.rms.entity.Allocation;
+import com.ris.rms.entity.CandidateDocument;
+import com.ris.rms.entity.Company;
+import com.ris.rms.entity.Demand;
+import com.ris.rms.entity.Employee;
+import com.ris.rms.entity.EmployeeDocument;
+import com.ris.rms.entity.Interview;
+import com.ris.rms.entity.ResourceRequest;
+import com.ris.rms.entity.Skill;
+import com.ris.rms.entity.UserAccount;
+import com.ris.rms.repository.AccountRepository;
+import com.ris.rms.repository.AllocationRepository;
+import com.ris.rms.repository.CandidateDocumentRepository;
+import com.ris.rms.repository.CandidateRepository;
+import com.ris.rms.repository.CompanyRepository;
+import com.ris.rms.repository.DemandRepository;
+import com.ris.rms.repository.DepartmentRepository;
+import com.ris.rms.repository.EmployeeDocumentRepository;
+import com.ris.rms.repository.EmployeeRepository;
+import com.ris.rms.repository.InterviewRepository;
+import com.ris.rms.repository.ResourceRequestRepository;
+import com.ris.rms.repository.SkillRepository;
+import com.ris.rms.repository.UserAccountRepository;
+import com.ris.rms.service.DemandService;
+import com.ris.rms.service.EmailService;
+import com.ris.rms.service.ResourceRequestService;
+
+import jakarta.persistence.criteria.Predicate;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class DemandServiceImpl implements DemandService {
+
+	private final DemandRepository demandRepo;
+	private final ResourceRequestService rrService;
+	private final ResourceRequestRepository rrRepo;
+	private final CompanyRepository companyRepo;
+	private final AccountRepository accountRepo;
+	private final DepartmentRepository departmentRepo;
+	private final UserAccountRepository userAccountRepo;
+	private final EmployeeRepository employeeRepo;
+	private final SkillRepository skillRepo;
+	private final InterviewRepository interviewRepo;
+	private final AllocationRepository allocationRepo;
+	private final EmployeeDocumentRepository employeeDocumentRepo;
+	private final EmailService emailService;
+	private final CandidateRepository candidateRepo;
+	private final CandidateDocumentRepository candidateDocumentRepo;
+
+	private final ObjectMapper om = new ObjectMapper().registerModule(new JavaTimeModule())
+			.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+	@Override
+	@Transactional(readOnly = true)
+	public byte[] generateExcelReport(DemandReportRequest req) throws Exception {
+		if (req.getUserId() == null) {
+			throw new IllegalArgumentException("userId is required for permission check.");
+		}
+		UserAccount user = userAccountRepo.findById(req.getUserId())
+				.orElseThrow(() -> new IllegalArgumentException("User not found: " + req.getUserId()));
+
+		Pageable unpaged = Pageable.unpaged(Sort.by(Sort.Direction.DESC, "demandopendt"));
+		Page<GroupFlowDto> pageResult = getDemandFlowList(user.getCompanyId(), req.getAccountId(), null, null,
+				req.getFromDate(), req.getToDate(), unpaged);
+
+		List<Map<String, Object>> data = transformDemandToNested(pageResult.getContent());
+
+		try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+
+			CellStyle headerStyle = workbook.createCellStyle();
+			Font headerFont = workbook.createFont();
+			headerFont.setBold(true);
+			headerFont.setColor(IndexedColors.WHITE.getIndex());
+			headerFont.setFontHeightInPoints((short) 12);
+			headerStyle.setFont(headerFont);
+			headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
+			headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			headerStyle.setAlignment(HorizontalAlignment.CENTER);
+			headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+			headerStyle.setBorderBottom(BorderStyle.THIN);
+			headerStyle.setBorderTop(BorderStyle.THIN);
+			headerStyle.setBorderLeft(BorderStyle.THIN);
+			headerStyle.setBorderRight(BorderStyle.THIN);
+			headerStyle.setWrapText(true);
+
+			CellStyle cellStyle = workbook.createCellStyle();
+			Font cellFont = workbook.createFont();
+			cellFont.setFontHeightInPoints((short) 10);
+			cellStyle.setFont(cellFont);
+			cellStyle.setWrapText(true);
+			cellStyle.setVerticalAlignment(VerticalAlignment.TOP);
+			cellStyle.setBorderBottom(BorderStyle.THIN);
+			cellStyle.setBorderTop(BorderStyle.THIN);
+			cellStyle.setBorderLeft(BorderStyle.THIN);
+			cellStyle.setBorderRight(BorderStyle.THIN);
+			cellStyle.setAlignment(HorizontalAlignment.LEFT);
+
+			Sheet sheet1 = workbook.createSheet("Demand Summary");
+			String[] headers1 = { "Demand ID", "Demand Name", "Description", "Project", "Account", "Dates", "Requests",
+					"Pipeline Summary", "Employees (Resumes)", "Resume Status" };
+
+			Row hRow1 = sheet1.createRow(0);
+			hRow1.setHeightInPoints(30);
+			for (int i = 0; i < headers1.length; i++) {
+				Cell cell = hRow1.createCell(i);
+				cell.setCellValue(headers1[i]);
+				cell.setCellStyle(headerStyle);
+			}
+
+			int r1 = 1;
+			for (Map<String, Object> d : data) {
+				@SuppressWarnings("unchecked")
+				Map<String, Object> info = (Map<String, Object>) d.get("demandInfo");
+				@SuppressWarnings("unchecked")
+				Map<String, Object> ctx = (Map<String, Object>) d.get("contextInfo");
+				@SuppressWarnings("unchecked")
+				Map<String, Object> stats = (Map<String, Object>) d.get("statusSummary");
+
+				Row row = sheet1.createRow(r1++);
+				int c = 0;
+
+				Cell c1 = row.createCell(c++);
+				c1.setCellValue(nvl(info.get("demandId"), "").toString());
+				c1.setCellStyle(cellStyle);
+
+				Cell c2 = row.createCell(c++);
+				c2.setCellValue(nvl(info.get("title"), "").toString());
+				c2.setCellStyle(cellStyle);
+
+				Cell c3 = row.createCell(c++);
+				c3.setCellValue(nvl(info.get("description"), "").toString());
+				c3.setCellStyle(cellStyle);
+
+				Cell c4 = row.createCell(c++);
+				c4.setCellValue(nvl(ctx.get("projectName"), "").toString());
+				c4.setCellStyle(cellStyle);
+
+				Cell c5 = row.createCell(c++);
+				c5.setCellValue(nvl(ctx.get("accountName"), "").toString());
+				c5.setCellStyle(cellStyle);
+
+				String datesStr = String.format("Open: %s\nPlanned: %s\nActual: %s", nvl(info.get("demandOpenDt"), "-"),
+						nvl(info.get("fulfilmentDt"), "-"), nvl(info.get("actualFulfilmentDt"), "-"));
+				Cell c6 = row.createCell(c++);
+				c6.setCellValue(datesStr);
+				c6.setCellStyle(cellStyle);
+
+				@SuppressWarnings("unchecked")
+				List<String> reqIds = (List<String>) stats.get("requestIds");
+				String reqStr = (reqIds != null && !reqIds.isEmpty()) ? String.join(" ", reqIds) : "-";
+				Cell c7 = row.createCell(c++);
+				c7.setCellValue(reqStr);
+				c7.setCellStyle(cellStyle);
+
+				String pipelineStr = String.format("Selected: %s\nAllocated: %s\nOnboarded: %s",
+						nvl(stats.get("selected"), "0"), nvl(stats.get("allocated"), "0"),
+						nvl(stats.get("onboarded"), "0"));
+				Cell c8 = row.createCell(c++);
+				c8.setCellValue(pipelineStr);
+				c8.setCellStyle(cellStyle);
+
+				@SuppressWarnings("unchecked")
+				List<Map<String, Object>> resEmps = (List<Map<String, Object>>) stats.get("resumeEmployees");
+				String empStr = "";
+				if (resEmps != null && !resEmps.isEmpty()) {
+					empStr = resEmps.stream().map(e -> "#" + e.get("employeeId") + "-" + e.get("employeeName") + " ("
+							+ e.get("resumeStatus") + ")").collect(Collectors.joining("\n"));
+				} else {
+					empStr = "-";
+				}
+				Cell c9 = row.createCell(c++);
+				c9.setCellValue(empStr);
+				c9.setCellStyle(cellStyle);
+
+				String resStatusStr = String.format("%s\nShared: %s | Rejected: %s",
+						nvl(stats.get("resumeStatus"), "-"), nvl(stats.get("resumeSharedCount"), "0"),
+						nvl(stats.get("resumeRejectedCount"), "0"));
+				Cell c10 = row.createCell(c++);
+				c10.setCellValue(resStatusStr);
+				c10.setCellStyle(cellStyle);
+			}
+
+			for (int i = 0; i < headers1.length; i++) {
+				sheet1.autoSizeColumn(i);
+				if (sheet1.getColumnWidth(i) > 12000)
+					sheet1.setColumnWidth(i, 12000);
+				if (sheet1.getColumnWidth(i) < 3000)
+					sheet1.setColumnWidth(i, 3000);
+			}
+
+			Sheet sheet2 = workbook.createSheet("Detailed Pipeline");
+			String[] headers2 = { "Demand ID", "Demand Name", "Request ID", "Candidate", "Interview Status",
+					"Allocated", "Onboarded", "Resume" };
+
+			Row hRow2 = sheet2.createRow(0);
+			hRow2.setHeightInPoints(30);
+			for (int i = 0; i < headers2.length; i++) {
+				Cell cell = hRow2.createCell(i);
+				cell.setCellValue(headers2[i]);
+				cell.setCellStyle(headerStyle);
+			}
+			sheet2.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, headers2.length - 1));
+
+			int r2 = 1;
+			for (Map<String, Object> d : data) {
+				@SuppressWarnings("unchecked")
+				Map<String, Object> info = (Map<String, Object>) d.get("demandInfo");
+				@SuppressWarnings("unchecked")
+				List<Map<String, Object>> pipelines = (List<Map<String, Object>>) d.get("pipelineRows");
+
+				String demandId = nvl(info.get("demandId"), "").toString();
+				String demandTitle = nvl(info.get("title"), "").toString();
+
+				if (pipelines != null && !pipelines.isEmpty()) {
+					for (Map<String, Object> p : pipelines) {
+						Row row = sheet2.createRow(r2++);
+						int c = 0;
+
+						Cell c1 = row.createCell(c++);
+						c1.setCellValue(demandId);
+						c1.setCellStyle(cellStyle);
+
+						Cell c2 = row.createCell(c++);
+						c2.setCellValue(demandTitle);
+						c2.setCellStyle(cellStyle);
+
+						Cell c3 = row.createCell(c++);
+						c3.setCellValue(nvl(p.get("requestId"), "").toString());
+						c3.setCellStyle(cellStyle);
+
+						String candStr = String.format("#%s - %s\n%s", nvl(p.get("employeeId"), "-"),
+								nvl(p.get("candidateName"), "-"), nvl(p.get("candidateEmail"), "-"));
+						Cell c4 = row.createCell(c++);
+						c4.setCellValue(candStr);
+						c4.setCellStyle(cellStyle);
+
+						Cell c5 = row.createCell(c++);
+						c5.setCellValue(nvl(p.get("interviewStatus"), "-").toString());
+						c5.setCellStyle(cellStyle);
+
+						Cell c6 = row.createCell(c++);
+						c6.setCellValue(nvl(p.get("allocated"), "-").toString());
+						c6.setCellStyle(cellStyle);
+
+						Cell c7 = row.createCell(c++);
+						c7.setCellValue(nvl(p.get("onboarded"), "-").toString());
+						c7.setCellStyle(cellStyle);
+
+						Cell c8 = row.createCell(c++);
+						c8.setCellValue(nvl(p.get("resumeStatus"), "-").toString());
+						c8.setCellStyle(cellStyle);
+					}
+				}
+			}
+
+			for (int i = 0; i < headers2.length; i++) {
+				sheet2.autoSizeColumn(i);
+				if (sheet2.getColumnWidth(i) > 12000)
+					sheet2.setColumnWidth(i, 12000);
+				if (sheet2.getColumnWidth(i) < 3000)
+					sheet2.setColumnWidth(i, 3000);
+			}
+
+			workbook.write(out);
+			return out.toByteArray();
+		}
+	}
+
+	@Override
+	public DemandResponseDto createDemand(DemandCreateDto dto) {
+		Specification<Demand> dupSpec = (root, query, cb) -> {
+			List<Predicate> p = new ArrayList<>();
+			p.add(cb.equal(root.get("companyId"), dto.getCompanyId()));
+			p.add(cb.equal(root.get("demandtitle"), dto.getDemandTitle()));
+			p.add(cb.notEqual(root.get("overallStatus"), "Cancelled"));
+			return cb.and(p.toArray(new Predicate[0]));
+		};
+
+		long count = demandRepo.count(dupSpec);
+		if (count > 0) {
+			throw new IllegalArgumentException("A Demand with this title already exists. Please check the list.");
+		}
+
+		companyRepo.findById(dto.getCompanyId())
+				.orElseThrow(() -> new IllegalArgumentException("Company not found: " + dto.getCompanyId()));
+		accountRepo.findById(dto.getAccountId())
+				.orElseThrow(() -> new IllegalArgumentException("Account not found: " + dto.getAccountId()));
+		departmentRepo.findById(dto.getDepartmentId())
+				.orElseThrow(() -> new IllegalArgumentException("Department not found: " + dto.getDepartmentId()));
+		userAccountRepo.findById(dto.getRequesterUserId()).orElseThrow(
+				() -> new IllegalArgumentException("Requester user not found: " + dto.getRequesterUserId()));
+
+		Demand demand = new Demand();
+		demand.setCompanyId(dto.getCompanyId());
+		demand.setRequesterUserId(dto.getRequesterUserId());
+		demand.setAccountId(dto.getAccountId());
+		demand.setDepartmentId(dto.getDepartmentId());
+		demand.setProjectName(dto.getProjectName());
+		demand.setDemandtitle(dto.getDemandTitle());
+		demand.setDescription(dto.getDescription());
+
+		if (dto.getDemandOpenDt() != null) {
+			demand.setDemandopendt(dto.getDemandOpenDt());
+		} else {
+			demand.setDemandopendt(LocalDate.now());
+		}
+
+		demand.setFulfilmentdt(dto.getFulfilmentDt());
+		demand.setActualFulfilmentDt(null);
+
+		demand.setYearsofexp(dto.getYearsofexp());
+		demand.setSkillIds(dto.getSkillIds());
+		demand.setRoleduration(dto.getRoleDuration());
+		demand.setWorklocpref(dto.getWorkLocPref());
+		demand.setPriority(dto.getPriority());
+		demand.setLocationType(dto.getLocationType());
+		demand.setWorkMode(dto.getWorkMode());
+		demand.setResourceRequestsCount(dto.getResourceRequests());
+
+		demand.setOverallStatus("Open");
+
+		Demand savedDemand = demandRepo.save(demand);
+
+		// Resource Requests are NOT created at demand creation.
+		// resourceRequestsCount is only the required headcount target.
+		// Actual ResourceRequest records are created when HR shares a resume to this demand.
+
+		return getDemandById(savedDemand.getDemandid());
+	}
+
+	@Override
+	public DemandResponseDto updateDemand(Long demandId, DemandCreateDto dto) {
+		Demand demand = demandRepo.findById(demandId)
+				.orElseThrow(() -> new IllegalArgumentException("Demand not found: " + demandId));
+
+		if ("Cancelled".equalsIgnoreCase(demand.getOverallStatus())) {
+			throw new IllegalArgumentException("This Demand is Cancelled and cannot be edited.");
+		}
+
+		if (dto.getResourceRequests() != null) {
+			// Only update the required headcount target — do NOT create/delete ResourceRequest records.
+			// Actual ResourceRequest records are created only when HR shares a resume to this demand.
+			demand.setResourceRequestsCount(dto.getResourceRequests());
+		}
+
+		if (dto.getDemandTitle() != null)
+			demand.setDemandtitle(dto.getDemandTitle());
+		if (dto.getDescription() != null)
+			demand.setDescription(dto.getDescription());
+		if (dto.getProjectName() != null)
+			demand.setProjectName(dto.getProjectName());
+		if (dto.getYearsofexp() != null)
+			demand.setYearsofexp(dto.getYearsofexp());
+		if (dto.getSkillIds() != null)
+			demand.setSkillIds(dto.getSkillIds());
+		if (dto.getRoleDuration() != null)
+			demand.setRoleduration(dto.getRoleDuration());
+		if (dto.getWorkLocPref() != null)
+			demand.setWorklocpref(dto.getWorkLocPref());
+		if (dto.getPriority() != null)
+			demand.setPriority(dto.getPriority());
+		if (dto.getLocationType() != null)
+			demand.setLocationType(dto.getLocationType());
+		if (dto.getWorkMode() != null)
+			demand.setWorkMode(dto.getWorkMode());
+		if (dto.getFulfilmentDt() != null)
+			demand.setFulfilmentdt(dto.getFulfilmentDt());
+
+		if (dto.getStatus() != null && !dto.getStatus().isBlank()) {
+			demand.setOverallStatus(dto.getStatus());
+		}
+
+		if (dto.getAccountId() != null)
+			demand.setAccountId(dto.getAccountId());
+		if (dto.getDepartmentId() != null)
+			demand.setDepartmentId(dto.getDepartmentId());
+
+		Demand saved = demandRepo.save(demand);
+		return getDemandById(saved.getDemandid());
+	}
+
+	@Override
+	public void updateDemandStatusOnResumeShare(Long demandId) {
+		Demand demand = demandRepo.findById(demandId).orElse(null);
+		if (demand == null)
+			return;
+
+		if ("Open".equalsIgnoreCase(demand.getOverallStatus())) {
+			demand.setOverallStatus("InProgress");
+			demandRepo.save(demand);
+		}
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public DemandResponseDto getDemandById(Long demandId) {
+		Demand demand = demandRepo.findById(demandId)
+				.orElseThrow(() -> new IllegalArgumentException("Demand not found: " + demandId));
+		return toResponseDto(demand, true);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<DemandResponseDto> listDemands(Long companyId, Long accountId, Long departmentId, String status,
+			Integer page, Integer size) {
+		Specification<Demand> spec = (root, query, cb) -> {
+			List<Predicate> predicates = new ArrayList<>();
+			if (companyId != null) {
+				predicates.add(cb.equal(root.get("companyId"), companyId));
+			}
+			if (accountId != null) {
+				predicates.add(cb.equal(root.get("accountId"), accountId));
+			}
+			if (departmentId != null) {
+				predicates.add(cb.equal(root.get("departmentId"), departmentId));
+			}
+			if (status != null && !status.isBlank()) {
+				predicates.add(cb.equal(root.get("overallStatus"), status));
+			}
+			return cb.and(predicates.toArray(new Predicate[0]));
+		};
+
+		Sort sort = Sort.by(Sort.Direction.DESC, "createddt");
+
+		int pageNum = (page != null && page >= 0) ? page : 0;
+		int pageSize = (size != null && size > 0) ? size : 20;
+
+		Pageable pageable = PageRequest.of(pageNum, pageSize, sort);
+
+		Page<Demand> demandPage = demandRepo.findAll(spec, pageable);
+
+		return demandPage.getContent().stream().map(demand -> toResponseDto(demand, false)).toList();
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public void generateReport(DemandReportRequest req) {
+		if (req.getUserId() == null) {
+			throw new IllegalArgumentException("userId is required to send the report.");
+		}
+
+		List<String> toEmails = Optional.ofNullable(req.getToEmail()).orElse(Collections.emptyList()).stream()
+				.filter(Objects::nonNull).map(String::trim).filter(s -> !s.isBlank()).toList();
+
+		if (toEmails.isEmpty()) {
+			throw new IllegalArgumentException(
+					"toEmail is required and must contain at least one valid email address.");
+		}
+
+		List<String> ccEmails = Optional.ofNullable(req.getCcEmail()).orElse(Collections.emptyList()).stream()
+				.filter(Objects::nonNull).map(String::trim).filter(s -> !s.isBlank()).toList();
+
+		UserAccount user = userAccountRepo.findById(req.getUserId())
+				.orElseThrow(() -> new IllegalArgumentException("User not found: " + req.getUserId()));
+
+		Pageable unpaged = Pageable.unpaged(Sort.by(Sort.Direction.DESC, "demandopendt"));
+
+		Page<GroupFlowDto> pageResult = getDemandFlowList(user.getCompanyId(), req.getAccountId(), null, null,
+				req.getFromDate(), req.getToDate(), unpaged);
+
+		if (pageResult.isEmpty()) {
+
+		}
+
+		List<Map<String, Object>> nestedData = transformDemandToNested(pageResult.getContent());
+
+		String rangeText = buildDateRangeText(req.getFromDate(), req.getToDate());
+		String subject = "Demand Flow Report - " + rangeText;
+
+		String userName = user.getEmail();
+		if (user.getEmployeeId() != null) {
+			Employee e = employeeRepo.findById(user.getEmployeeId()).orElse(null);
+			if (e != null && e.getFirstName() != null && !e.getFirstName().isBlank()) {
+				userName = e.getFirstName();
+			}
+		}
+
+		emailService.sendDemandReportEmailAsync(toEmails, ccEmails, subject, userName, nestedData, rangeText);
+	}
+
+	private List<Map<String, Object>> transformDemandToNested(List<GroupFlowDto> rows) {
+		Map<Long, List<GroupFlowDto>> byGroup = rows.stream()
+				.collect(Collectors.groupingBy(GroupFlowDto::getGroupId, LinkedHashMap::new, Collectors.toList()));
+
+		List<Map<String, Object>> out = new ArrayList<>();
+
+		for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+			List<GroupFlowDto> groupRows = ge.getValue();
+			GroupFlowDto g0 = groupRows.stream().findFirst().orElse(null);
+			if (g0 == null) {
+				continue;
+			}
+
+			Map<String, Object> groupInfo = new LinkedHashMap<>();
+			groupInfo.put("demandId", g0.getGroupId());
+			groupInfo.put("title", g0.getGroupTitle());
+			groupInfo.put("description", g0.getDescription());
+			groupInfo.put("createdAt", g0.getGroupCreatedAt() == null ? null : g0.getGroupCreatedAt().toString());
+			groupInfo.put("totalRequested", g0.getGroupTotalRequested());
+			groupInfo.put("status", g0.getGroupStatus());
+			groupInfo.put("priority", g0.getPriority());
+
+			groupInfo.put("demandOpenDt", g0.getDemandOpenDt() == null ? "-" : g0.getDemandOpenDt().toString());
+			groupInfo.put("fulfilmentDt", g0.getFulfilmentDt() == null ? "-" : g0.getFulfilmentDt().toString());
+			groupInfo.put("actualFulfilmentDt",
+					g0.getActualFulfilmentDt() == null ? "-" : g0.getActualFulfilmentDt().toString());
+
+			Map<String, Object> contextInfo = new LinkedHashMap<>();
+			contextInfo.put("companyName", g0.getCompanyName());
+			contextInfo.put("projectName", g0.getProjectName());
+			contextInfo.put("accountName", g0.getAccountName());
+
+			Map<String, Object> statusSummary = new LinkedHashMap<>();
+			statusSummary.put("selected", nvl(g0.getSummarySelected(), 0));
+			statusSummary.put("allocated", nvl(g0.getSummaryAllocated(), 0));
+			statusSummary.put("onboarded", nvl(g0.getSummaryOnboarded(), 0));
+
+			boolean anyResumeShared = false;
+			boolean anyResumeUploaded = false;
+
+			int resumeSharedCount = 0;
+			int resumeRejectedCount = 0;
+			List<Map<String, Object>> resumeEmployees = new ArrayList<>();
+
+			Map<Long, List<GroupFlowDto>> byRequest = groupRows.stream().filter(r -> r.getRequestId() != null).collect(
+					Collectors.groupingBy(GroupFlowDto::getRequestId, LinkedHashMap::new, Collectors.toList()));
+
+			List<Map<String, Object>> childRequestDetails = new ArrayList<>();
+
+			for (Map.Entry<Long, List<GroupFlowDto>> re : byRequest.entrySet()) {
+				Long reqId = re.getKey();
+				List<GroupFlowDto> reqRows = re.getValue();
+
+				Map<Long, List<GroupFlowDto>> byInterview = reqRows.stream().filter(r -> r.getInterviewId() != null)
+						.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId, LinkedHashMap::new,
+								Collectors.toList()));
+
+				for (Map.Entry<Long, List<GroupFlowDto>> ie : byInterview.entrySet()) {
+					List<GroupFlowDto> ivRows = ie.getValue();
+					GroupFlowDto i0 = ivRows.get(0);
+
+					Map<String, Object> pipelineRow = new LinkedHashMap<>();
+					pipelineRow.put("demandId", g0.getGroupId());
+					pipelineRow.put("demandTitle", g0.getGroupTitle());
+					pipelineRow.put("requestId", reqId);
+					pipelineRow.put("candidateName", i0.getCandidateName());
+					pipelineRow.put("candidateEmail", i0.getCandidateEmail());
+					pipelineRow.put("employeeId", i0.getCandidateEmployeeId());
+
+					String statusStr = i0.getInterviewOverallStatus();
+					pipelineRow.put("interviewStatus", statusStr != null ? statusStr : "In Progress");
+
+					pipelineRow.put("allocated",
+							i0.getAllocationId() != null ? "Yes (Alloc #" + i0.getAllocationId() + ")" : "No");
+
+					boolean isOnboarded = ivRows.stream()
+							.anyMatch(x -> "ONBOARDING".equalsIgnoreCase(x.getInterviewLevel())
+									&& "OnBoarded".equalsIgnoreCase(x.getInterviewLevelStatus()));
+					pipelineRow.put("onboarded", isOnboarded ? "On Boarded" : "-");
+
+					String candidateResumeStatus = i0.getCandidateResumeStatus();
+					pipelineRow.put("resumeStatus", candidateResumeStatus != null ? candidateResumeStatus : "Pending");
+
+					if (candidateResumeStatus != null) {
+						anyResumeUploaded = true;
+
+						String statusLower = candidateResumeStatus.toLowerCase(Locale.ROOT);
+						if (statusLower.contains("shared")) {
+							anyResumeShared = true;
+							resumeSharedCount++;
+						} else if (statusLower.contains("reject")) {
+							resumeRejectedCount++;
+						}
+
+						Long empId = i0.getCandidateEmployeeId();
+						String empName = i0.getCandidateName();
+						if (empId != null || (empName != null && !empName.isBlank())) {
+							Map<String, Object> empMeta = new LinkedHashMap<>();
+							empMeta.put("employeeId", empId);
+							empMeta.put("employeeName", empName);
+							empMeta.put("resumeStatus", candidateResumeStatus);
+							resumeEmployees.add(empMeta);
+						}
+					}
+
+					childRequestDetails.add(pipelineRow);
+				}
+			}
+
+			String resumeSummary = "No Resumes";
+			if (anyResumeShared) {
+				resumeSummary = "Shared";
+			} else if (anyResumeUploaded) {
+				resumeSummary = "Uploaded";
+			}
+
+			statusSummary.put("resumeStatus", resumeSummary);
+			statusSummary.put("resumeSharedCount", resumeSharedCount);
+			statusSummary.put("resumeRejectedCount", resumeRejectedCount);
+			statusSummary.put("resumeEmployees", resumeEmployees);
+
+			List<String> reqIds = byRequest.keySet().stream().map(id -> "#" + id).toList();
+			statusSummary.put("requestIds", reqIds);
+
+			Map<String, Object> groupBlock = new LinkedHashMap<>();
+			groupBlock.put("demandInfo", groupInfo);
+			groupBlock.put("contextInfo", contextInfo);
+			groupBlock.put("statusSummary", statusSummary);
+			groupBlock.put("pipelineRows", childRequestDetails);
+
+			out.add(groupBlock);
+		}
+		return out;
+	}
+
+	private static <T> T nvl(T v, T def) {
+		return v == null ? def : v;
+	}
+
+	private DemandResponseDto toResponseDto(Demand demand) {
+		return toResponseDto(demand, false);
+	}
+
+	private DemandResponseDto toResponseDto(Demand demand, boolean recalculateStatus) {
+		DemandResponseDto dto = new DemandResponseDto();
+
+		dto.setDemandid(demand.getDemandid());
+		dto.setDemandTitle(demand.getDemandtitle());
+		dto.setDescription(demand.getDescription());
+		dto.setDemandOpenDt(demand.getDemandopendt());
+		dto.setCompanyId(demand.getCompanyId());
+		dto.setAccountId(demand.getAccountId());
+		dto.setDepartmentId(demand.getDepartmentId());
+		dto.setProjectName(demand.getProjectName());
+		dto.setRequesterUserId(demand.getRequesterUserId());
+		dto.setYearsofexp(demand.getYearsofexp());
+		dto.setSkillIds(demand.getSkillIds());
+
+		dto.setFulfilmentDt(demand.getFulfilmentdt());
+		dto.setActualFulfilmentDt(demand.getActualFulfilmentDt());
+
+		LocalDate target = demand.getFulfilmentdt();
+		LocalDate actual = dto.getActualFulfilmentDt();
+
+		if (actual != null && target != null) {
+			dto.setFulfilledWithinTarget(!actual.isAfter(target));
+		} else {
+			dto.setFulfilledWithinTarget(false);
+		}
+
+		dto.setRoleDuration(demand.getRoleduration());
+		dto.setLocationType(demand.getLocationType());
+		dto.setWorkLocPref(demand.getWorklocpref());
+		dto.setWorkMode(demand.getWorkMode());
+		dto.setPriority(demand.getPriority());
+		dto.setOverallStatus(demand.getOverallStatus());
+		dto.setCreateddt(demand.getCreateddt());
+		dto.setUpdateddt(demand.getUpdateddt());
+		dto.setResourceRequestsCount(demand.getResourceRequestsCount());
+		// Count only real resource requests (created via resume sharing)
+		dto.setSubmittedProfilesCount(rrRepo.countActualByDemandId(demand.getDemandid()));
+		if (demand.getCreateddt() != null) {
+			dto.setPendingDays(ChronoUnit.DAYS.between(demand.getCreateddt().toLocalDate(), LocalDate.now()));
+		} else {
+			dto.setPendingDays(0);
+		}
+
+		companyRepo.findById(demand.getCompanyId()).ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
+		accountRepo.findById(demand.getAccountId()).ifPresent(a -> {
+			dto.setAccountName(a.getAccountName());
+			dto.setAccountEmail(a.getContactPersonEmail());
+		});
+		departmentRepo.findById(demand.getDepartmentId()).ifPresent(d -> dto.setDepartmentName(d.getDepartmentName()));
+		if (demand.getSkillIds() != null && !demand.getSkillIds().isEmpty()) {
+			dto.setSkillName(skillRepo.findAllById(demand.getSkillIds()).stream().map(Skill::getSkillName).toList());
+		}
+		
+		if (demand.getRequesterUserId() != null) {
+		    userAccountRepo.findById(demand.getRequesterUserId()).ifPresent(ua -> {
+		        dto.setRequesterEmail(ua.getEmail());
+		        if (ua.getEmployeeId() != null) {
+		            employeeRepo.findById(ua.getEmployeeId())
+		                    .ifPresent(e -> dto.setRequesterName(e.getFirstName() + " " + e.getLastName()));
+		        }
+		    });
+		}
+		
+		if (demand.getUpdatedby() != null) {
+		    dto.setUpdatedById(demand.getUpdatedby());
+		    userAccountRepo.findById(demand.getUpdatedby()).ifPresent(ua -> {
+		        dto.setUpdatedByEmail(ua.getEmail());
+		        if (ua.getEmployeeId() != null) {
+		            employeeRepo.findById(ua.getEmployeeId())
+		                    .ifPresent(e -> dto.setUpdatedByName(e.getFirstName() + " " + e.getLastName()));
+		        }
+		        if (dto.getUpdatedByName() == null) {
+		            dto.setUpdatedByName(ua.getEmail());
+		        }
+		    });
+		}
+		dto.setSharedResumes(getResumeShareInfos(demand.getDemandid()));
+
+		// Only process real resource requests (those created via resume sharing)
+		List<ResourceRequest> childRequests = rrRepo.findActualByDemandId(demand.getDemandid());
+
+		List<DemandRequestSummaryDto> summaryList = new ArrayList<>();
+		DemandStageCountsDto stageCounts = new DemandStageCountsDto();
+		stageCounts.setTotal((int) rrRepo.countActualByDemandId(demand.getDemandid()));
+
+		LocalDate lastFulfilmentDate = null;
+		int allocatedRequests = 0;
+
+		for (ResourceRequest req : childRequests) {
+			DemandRequestSummaryDto summaryItem = new DemandRequestSummaryDto();
+			summaryItem.setRequestId(req.getRequestId());
+
+			OffsetDateTime lastUpdate = null;
+
+			if (req.getSubmittedDate() != null) {
+				lastUpdate = req.getSubmittedDate().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+			} else if (demand.getCreateddt() != null) {
+				lastUpdate = demand.getCreateddt();
+			} else if (demand.getDemandopendt() != null) {
+				lastUpdate = demand.getDemandopendt().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+			}
+
+			if (lastUpdate != null) {
+				summaryItem.setPendingDays(ChronoUnit.DAYS.between(lastUpdate.toLocalDate(), LocalDate.now()));
+			} else {
+				summaryItem.setPendingDays(0);
+			}
+
+			boolean isFinalState = false;
+
+			Optional<Allocation> alloc = allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId());
+			if (alloc.isPresent()) {
+				summaryItem.setStage("Allocated");
+				summaryItem.setStageReason("Employee allocated on " + alloc.get().getStartDate());
+				summaryItem.setLastUpdatedAt(
+						alloc.get().getStartDate().atStartOfDay().atOffset(OffsetDateTime.now().getOffset()));
+				stageCounts.addAllocated();
+				isFinalState = true;
+
+				allocatedRequests++;
+
+				if (lastFulfilmentDate == null || alloc.get().getStartDate().isAfter(lastFulfilmentDate)) {
+					lastFulfilmentDate = alloc.get().getStartDate();
+				}
+			}
+
+			if (!isFinalState) {
+				Optional<Interview> interviewOpt = interviewRepo
+						.findTopByRequestIdOrderByInterviewIdDesc(req.getRequestId());
+				if (interviewOpt.isPresent()) {
+					Interview interview = interviewOpt.get();
+					lastUpdate = interview.getScheduledAt();
+
+					if ("Selected".equalsIgnoreCase(interview.getStatus())) {
+						summaryItem.setStage("Selected");
+						summaryItem.setStageReason("Interview Selected, Pending Allocation");
+						stageCounts.addSelected();
+					} else if ("Rejected".equalsIgnoreCase(interview.getStatus())) {
+						summaryItem.setStage("Rejected");
+						summaryItem.setStageReason("Interview Rejected");
+						stageCounts.addRejected();
+						isFinalState = true;
+					} else if ("Scheduled".equalsIgnoreCase(interview.getStatus())) {
+						summaryItem.setStage("Interview Scheduled");
+						summaryItem.setStageReason("Interview Scheduled");
+						stageCounts.addInterviewScheduled();
+					} else {
+						summaryItem.setStage("Interview In Progress");
+						summaryItem.setStageReason("Interview " + interview.getStatus());
+						stageCounts.addInterviewInProgress();
+					}
+				}
+			}
+
+			if (summaryItem.getStage() == null) {
+				if ("Fulfilled".equalsIgnoreCase(req.getStatus())) {
+					summaryItem.setStage("Allocated");
+					summaryItem.setStageReason("Request fulfilled");
+					stageCounts.addAllocated();
+					isFinalState = true;
+
+					allocatedRequests++;
+				} else if ("Rejected".equalsIgnoreCase(req.getStatus())) {
+					summaryItem.setStage("Rejected");
+					summaryItem.setStageReason("Request Rejected by HR/PM");
+					stageCounts.addRejected();
+					isFinalState = true;
+				} else if ("Cancelled".equalsIgnoreCase(req.getStatus())) {
+					summaryItem.setStage("Rejected");
+					summaryItem.setStageReason("Request Cancelled");
+					stageCounts.addRejected();
+					isFinalState = true;
+				} else if ("Submitted".equalsIgnoreCase(req.getStatus())) {
+					summaryItem.setStage("Approval Pending");
+					summaryItem.setStageReason("Awaiting HR approval");
+					stageCounts.addApprovalPending();
+				} else {
+					summaryItem.setStage("Open");
+					summaryItem.setStageReason("Draft state or no interview yet");
+					stageCounts.addOpen();
+				}
+			}
+
+			summaryItem.setLastUpdatedAt(lastUpdate);
+			summaryList.add(summaryItem);
+		}
+
+		dto.setRequestsSummary(summaryList);
+		dto.setStageCounts(stageCounts);
+
+		Integer totalRequested = demand.getResourceRequestsCount();
+
+		if (recalculateStatus || !"Completed".equalsIgnoreCase(demand.getOverallStatus())) {
+			if (totalRequested != null && totalRequested > 0 && allocatedRequests == totalRequested) {
+				dto.setOverallStatus("Completed");
+				demand.setOverallStatus("Completed");
+
+				if (lastFulfilmentDate != null) {
+					demand.setActualFulfilmentDt(lastFulfilmentDate);
+					dto.setActualFulfilmentDt(lastFulfilmentDate);
+
+					if (demand.getFulfilmentdt() != null) {
+						dto.setFulfilledWithinTarget(!lastFulfilmentDate.isAfter(demand.getFulfilmentdt()));
+					}
+				}
+
+				demandRepo.save(demand);
+			}
+		}
+
+		return dto;
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public Page<GroupFlowDto> getDemandFlowList(Long companyId, Long accountId, Long departmentId, String status,
+			String fromDate, String toDate, Pageable pageable) {
+
+		LocalDate from = parseFlexibleDate(fromDate);
+		LocalDate to = parseFlexibleDate(toDate);
+
+		Specification<Demand> spec = (root, query, cb) -> {
+			List<Predicate> p = new ArrayList<>();
+			if (companyId != null) {
+				p.add(cb.equal(root.get("companyId"), companyId));
+			}
+			if (accountId != null) {
+				p.add(cb.equal(root.get("accountId"), accountId));
+			}
+			if (departmentId != null) {
+				p.add(cb.equal(root.get("departmentId"), departmentId));
+			}
+			if (status != null && !status.isBlank()) {
+				p.add(cb.equal(root.get("overallStatus"), status));
+			}
+			if (from != null) {
+				p.add(cb.greaterThanOrEqualTo(root.get("demandopendt"), from));
+			}
+			if (to != null) {
+				p.add(cb.lessThanOrEqualTo(root.get("demandopendt"), to));
+			}
+			return cb.and(p.toArray(new Predicate[0]));
+		};
+
+		Page<Demand> demandPage = demandRepo.findAll(spec, pageable);
+		if (demandPage.isEmpty()) {
+			return Page.empty(pageable);
+		}
+
+		List<Demand> demands = demandPage.getContent().stream()
+				.sorted(Comparator.comparing(Demand::getDemandopendt, Comparator.nullsLast(Comparator.reverseOrder()))
+						.thenComparing(Demand::getDemandid, Comparator.nullsLast(Comparator.reverseOrder())))
+				.toList();
+
+		List<Long> demandIds = demands.stream().map(Demand::getDemandid).toList();
+
+		List<ResourceRequest> allRequests = rrRepo.findAll().stream()
+				.filter(rr -> rr.getDemandId() != null && demandIds.contains(rr.getDemandId())).toList();
+
+		Map<Long, List<ResourceRequest>> reqsByDemandMap = allRequests.stream()
+				.collect(Collectors.groupingBy(ResourceRequest::getDemandId));
+
+		List<Long> allRequestIds = allRequests.stream().map(ResourceRequest::getRequestId).toList();
+
+		List<Interview> allInterviews = allRequestIds.isEmpty() ? List.of()
+				: interviewRepo.findAllByRequestIdIn(allRequestIds);
+		Map<Long, List<Interview>> interviewsByReqMap = allInterviews.stream()
+				.collect(Collectors.groupingBy(Interview::getRequestId));
+
+		List<Allocation> allAllocations = allRequestIds.isEmpty() ? List.of()
+				: allocationRepo.findByRequestIdIn(allRequestIds);
+		Map<Long, Allocation> allocByReqMap = allAllocations.stream()
+				.collect(Collectors.toMap(Allocation::getRequestId, Function.identity(), (a1, a2) -> a1));
+
+		Map<Long, Map<String, Integer>> summaries = preCalculateDemandSummaries(reqsByDemandMap, interviewsByReqMap,
+				allocByReqMap);
+		Set<Long> allEmployeeIds = allInterviews.stream().map(Interview::getEmployeeId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		allAllocations.stream().map(Allocation::getEmployeeId).filter(Objects::nonNull).forEach(allEmployeeIds::add);
+
+		Map<Long, Employee> employeeMap = allEmployeeIds.isEmpty() ? Map.of()
+				: employeeRepo.findAllById(allEmployeeIds).stream()
+						.collect(Collectors.toMap(Employee::getEmployeeId, Function.identity()));
+
+		Map<Long, EmployeeDocument> resumeMap = allEmployeeIds.isEmpty() ? Map.of()
+				: employeeDocumentRepo.findPrimaryResumesForEmployees(new ArrayList<>(allEmployeeIds)).stream()
+						.collect(Collectors.toMap(EmployeeDocument::getEmployeeId, Function.identity()));
+
+		Set<Long> allUserIds = new java.util.HashSet<>();
+		allInterviews.stream().flatMap(i -> readProgress(i.getLevelProgress()).stream())
+				.map(LevelProgressDto::getInterviewerUserId).filter(Objects::nonNull).forEach(allUserIds::add);
+
+		Map<Long, UserAccount> userMap = allUserIds.isEmpty() ? Map.of()
+				: userAccountRepo.findAllById(allUserIds).stream()
+						.collect(Collectors.toMap(UserAccount::getUserId, Function.identity()));
+
+		Set<Long> userEmployeeIds = userMap.values().stream().map(UserAccount::getEmployeeId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		if (!userEmployeeIds.isEmpty()) {
+			employeeRepo.findAllById(userEmployeeIds).forEach(emp -> employeeMap.putIfAbsent(emp.getEmployeeId(), emp));
+		}
+
+		Set<Long> companyIds = demands.stream().map(Demand::getCompanyId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		Map<Long, Company> companyMap = companyIds.isEmpty() ? Map.of()
+				: companyRepo.findAllById(companyIds).stream()
+						.collect(Collectors.toMap(Company::getCompanyId, Function.identity()));
+
+		Set<Long> accountIds = demands.stream().map(Demand::getAccountId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		Map<Long, Account> accountMap = accountIds.isEmpty() ? Map.of()
+				: accountRepo.findAllById(accountIds).stream()
+						.collect(Collectors.toMap(Account::getAccountId, Function.identity()));
+
+		List<GroupFlowDto> flatRows = new ArrayList<>();
+
+		for (Demand d : demands) {
+			buildFlatDemandFlowRows(flatRows, d, reqsByDemandMap.getOrDefault(d.getDemandid(), Collections.emptyList()),
+					summaries.getOrDefault(d.getDemandid(), Collections.emptyMap()), interviewsByReqMap, allocByReqMap,
+					employeeMap, resumeMap, userMap, companyMap, accountMap);
+		}
+
+		return new PageImpl<>(flatRows, pageable, demandPage.getTotalElements());
+	}
+
+	private Map<Long, Map<String, Integer>> preCalculateDemandSummaries(
+			Map<Long, List<ResourceRequest>> reqsByDemandMap, Map<Long, List<Interview>> interviewsByReqMap,
+			Map<Long, Allocation> allocByReqMap) {
+
+		Map<Long, Map<String, Integer>> summaryMap = new LinkedHashMap<>();
+
+		for (Map.Entry<Long, List<ResourceRequest>> entry : reqsByDemandMap.entrySet()) {
+			Long demandId = entry.getKey();
+			List<ResourceRequest> requests = entry.getValue();
+
+			int open = 0;
+			int interviewing = 0;
+			int selected = 0;
+			int allocated = 0;
+			int onboarded = 0;
+			int rejected = 0;
+			int totalInterviewsCount = 0;
+
+			for (ResourceRequest req : requests) {
+				Long reqId = req.getRequestId();
+				List<Interview> reqInterviews = interviewsByReqMap.getOrDefault(reqId, List.of());
+				totalInterviewsCount += reqInterviews.size();
+
+				boolean hasAnyInterview = !reqInterviews.isEmpty();
+				Allocation reqAlloc = allocByReqMap.get(reqId);
+				boolean hasAllocation = (reqAlloc != null);
+
+				Interview latestInterview = reqInterviews.isEmpty() ? null
+						: reqInterviews.stream().max(Comparator.comparing(Interview::getInterviewId,
+								Comparator.nullsLast(Comparator.naturalOrder()))).orElse(null);
+
+				boolean anySelectedForRequest = false;
+				boolean anyOnboardedForRequest = false;
+				boolean anyRejectedInterview = false;
+
+				if (latestInterview != null) {
+					String st = latestInterview.getStatus();
+					if ("Selected".equalsIgnoreCase(st)) {
+						anySelectedForRequest = true;
+					} else if ("Rejected".equalsIgnoreCase(st)) {
+						anyRejectedInterview = true;
+					}
+
+					List<LevelProgressDto> latestLevels = readProgress(latestInterview.getLevelProgress());
+					anyOnboardedForRequest = latestLevels.stream()
+							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && lp.getStatus() != null
+									&& lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+				}
+
+				boolean isRejectedReq = "Rejected".equalsIgnoreCase(req.getStatus())
+						|| "Cancelled".equalsIgnoreCase(req.getStatus());
+
+				if (hasAllocation) {
+					allocated++;
+				}
+
+				boolean isFinalPositive = anySelectedForRequest || anyOnboardedForRequest || hasAllocation;
+				boolean isFinalNegative = anyRejectedInterview || isRejectedReq;
+
+				if (!isFinalPositive && isFinalNegative) {
+					rejected++;
+				}
+
+				if (!isFinalPositive && !isFinalNegative) {
+					if (hasAnyInterview) {
+						interviewing++;
+					} else {
+						open++;
+					}
+				}
+
+				for (Interview iv : reqInterviews) {
+					boolean interviewSelected = "Selected".equalsIgnoreCase(iv.getStatus());
+
+					List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+					boolean interviewOnboarded = levels.stream()
+							.anyMatch(lp -> "ONBOARDING".equalsIgnoreCase(lp.getLevel()) && lp.getStatus() != null
+									&& lp.getStatus().replace(" ", "").equalsIgnoreCase("OnBoarded"));
+
+					boolean allocationForThisCandidate = false;
+					if (reqAlloc != null && iv.getEmployeeId() != null) {
+						allocationForThisCandidate = Objects.equals(reqAlloc.getEmployeeId(), iv.getEmployeeId());
+					}
+
+					if (interviewOnboarded || allocationForThisCandidate) {
+						onboarded++;
+					}
+
+					if (interviewSelected || interviewOnboarded || allocationForThisCandidate) {
+						selected++;
+					}
+				}
+			}
+
+			summaryMap.put(demandId,
+					Map.of("totalRequests", requests.size(), "open", open, "interviewing", interviewing, "selected",
+							selected, "allocated", allocated, "onboarded", onboarded, "rejected", rejected,
+							"totalInterviews", totalInterviewsCount));
+		}
+
+		return summaryMap;
+	}
+
+	private void buildFlatDemandFlowRows(List<GroupFlowDto> flatRows, Demand demand,
+			List<ResourceRequest> childRequests, Map<String, Integer> summary,
+			Map<Long, List<Interview>> interviewsByReqMap, Map<Long, Allocation> allocByReqMap,
+			Map<Long, Employee> employeeMap, Map<Long, EmployeeDocument> resumeMap, Map<Long, UserAccount> userMap,
+			Map<Long, Company> companyMap, Map<Long, Account> accountMap) {
+
+		GroupFlowDto baseRow = new GroupFlowDto();
+
+		baseRow.setGroupId(demand.getDemandid());
+		baseRow.setGroupTitle(demand.getDemandtitle());
+		OffsetDateTime openAt = demand.getDemandopendt() == null ? null
+				: demand.getDemandopendt().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+		baseRow.setGroupCreatedAt(openAt);
+		baseRow.setGroupTotalRequested(demand.getResourceRequestsCount());
+		baseRow.setGroupStatus(demand.getOverallStatus());
+		baseRow.setDemandOpenDt(demand.getDemandopendt());
+		baseRow.setPriority(demand.getPriority());
+		baseRow.setRoleDuration(demand.getRoleduration());
+		baseRow.setDescription(demand.getDescription());
+		baseRow.setFulfilmentDt(demand.getFulfilmentdt());
+		baseRow.setActualFulfilmentDt(demand.getActualFulfilmentDt());
+
+		if (demand.getActualFulfilmentDt() != null && demand.getFulfilmentdt() != null) {
+			baseRow.setFulfilledWithinTarget(!demand.getActualFulfilmentDt().isAfter(demand.getFulfilmentdt()));
+		} else {
+			baseRow.setFulfilledWithinTarget(false);
+		}
+		baseRow.setGroupCreatorUserId(demand.getRequesterUserId());
+		if (demand.getRequesterUserId() != null) {
+			UserAccount ua = userMap.get(demand.getRequesterUserId());
+			if (ua != null) {
+				baseRow.setGroupCreatorEmail(ua.getEmail());
+				if (ua.getEmployeeId() != null) {
+					Employee e = employeeMap.get(ua.getEmployeeId());
+					if (e != null) {
+						baseRow.setGroupCreatorName(e.getFirstName() + " " + e.getLastName());
+					}
+				}
+
+				if (baseRow.getGroupCreatorName() == null) {
+					baseRow.setGroupCreatorName(ua.getEmail());
+				}
+			}
+		}
+		baseRow.setCompanyId(demand.getCompanyId());
+		companyMap.computeIfPresent(demand.getCompanyId(), (k, v) -> {
+			baseRow.setCompanyName(v.getCompanyName());
+			return v;
+		});
+
+		if (demand.getAccountId() != null) {
+			baseRow.setAccountId(demand.getAccountId());
+			accountMap.computeIfPresent(demand.getAccountId(), (k, v) -> {
+				baseRow.setAccountName(v.getAccountName());
+				return v;
+			});
+		}
+
+		baseRow.setProjectId(null);
+		baseRow.setProjectName(demand.getProjectName());
+
+		baseRow.setSummaryTotalRequests(summary.getOrDefault("totalRequests", 0));
+		baseRow.setSummaryOpen(summary.getOrDefault("open", 0));
+		baseRow.setSummaryInterviewing(summary.getOrDefault("interviewing", 0));
+		baseRow.setSummarySelected(summary.getOrDefault("selected", 0));
+		baseRow.setSummaryAllocated(summary.getOrDefault("allocated", 0));
+		baseRow.setSummaryOnboarded(summary.getOrDefault("onboarded", 0));
+		baseRow.setSummaryRejected(summary.getOrDefault("rejected", 0));
+		baseRow.setSummaryTotalInterviews(summary.getOrDefault("totalInterviews", 0));
+
+		long pendingDays = (openAt != null) ? ChronoUnit.DAYS.between(openAt.toLocalDate(), LocalDate.now()) : 0;
+		baseRow.setSummaryPendingDays(pendingDays);
+
+		if (childRequests.isEmpty()) {
+			flatRows.add(baseRow);
+			return;
+		}
+
+		for (ResourceRequest req : childRequests) {
+			GroupFlowDto reqRow = copyBaseRow(baseRow);
+			reqRow.setRequestId(req.getRequestId());
+			reqRow.setRequestStatus(req.getStatus());
+
+			List<Interview> interviewsForReq = interviewsByReqMap.getOrDefault(req.getRequestId(),
+					Collections.emptyList());
+
+			if (interviewsForReq.isEmpty()) {
+				flatRows.add(reqRow);
+				continue;
+			}
+
+			for (Interview interview : interviewsForReq) {
+				GroupFlowDto interviewRow = copyBaseRow(reqRow);
+				interviewRow.setInterviewId(interview.getInterviewId());
+				interviewRow.setInterviewOverallStatus(interview.getStatus());
+
+				if (interview.getEmployeeId() != null) {
+
+					interviewRow.setResourceType("EMPLOYEE");
+					interviewRow.setCandidateEmployeeId(interview.getEmployeeId());
+					interviewRow.setCandidateId(null);
+
+					Employee emp = employeeMap.get(interview.getEmployeeId());
+					if (emp != null) {
+						interviewRow.setCandidateName(emp.getFirstName() + " " + emp.getLastName());
+						interviewRow.setCandidateEmail(emp.getEmail());
+						interviewRow.setCandidatePhoneNumber(emp.getPhoneNumber());
+						interviewRow.setCandidateDesignation(emp.getJobTitle());
+						interviewRow.setCandidateExperience(emp.getExperienceYears());
+
+						EmployeeDocument resume = resumeMap.get(emp.getEmployeeId());
+						if (resume != null) {
+							interviewRow.setCandidateResumeStatus(resume.getResumeShareStatus());
+						}
+					}
+				} else if (interview.getCandidateId() != null) {
+					interviewRow.setResourceType("CANDIDATE");
+					interviewRow.setCandidateId(interview.getCandidateId());
+					interviewRow.setCandidateEmployeeId(null);
+
+					candidateRepo.findById(interview.getCandidateId()).ifPresent(cand -> {
+						interviewRow.setCandidateName(cand.getFirstName() + " " + cand.getLastName());
+						interviewRow.setCandidateEmail(cand.getEmail());
+						interviewRow.setCandidatePhoneNumber(cand.getPhoneNumber());
+						interviewRow.setCandidateDesignation("Candidate");
+						interviewRow.setCandidateExperience(cand.getExperienceYears());
+					});
+					candidateDocumentRepo.findPrimaryResume(interview.getCandidateId()).ifPresent(doc -> {
+						interviewRow.setCandidateResumeStatus(doc.getResumeShareStatus());
+					});
+				}
+				Allocation alloc = allocByReqMap.get(req.getRequestId());
+				if (alloc != null && Objects.equals(alloc.getEmployeeId(), interview.getEmployeeId())) {
+					interviewRow.setAllocationId(alloc.getAllocationId());
+					Employee allocEmp = employeeMap.get(alloc.getEmployeeId());
+					interviewRow.setAllocationEmployeeName(
+							allocEmp != null ? allocEmp.getFirstName() + " " + allocEmp.getLastName() : null);
+					interviewRow.setAllocationStartDate(alloc.getStartDate());
+					interviewRow.setAllocationEndDate(alloc.getEndDate());
+					interviewRow.setAllocationProjectRole(alloc.getProjectRole());
+					interviewRow.setAllocationIsBillable(alloc.getIsBillable());
+				}
+
+				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
+				if (levels.isEmpty() || levels.stream().allMatch(l -> "__META__".equals(l.getLevel()))) {
+					flatRows.add(interviewRow);
+					continue;
+				}
+
+				for (LevelProgressDto level : levels) {
+					if ("__META__".equals(level.getLevel()))
+						continue;
+
+					GroupFlowDto levelRow = copyBaseRow(interviewRow);
+					levelRow.setInterviewLevel(level.getLevel());
+					levelRow.setInterviewLevelStatus(level.getStatus());
+					levelRow.setInterviewNotes(level.getInterviewNotes());
+					levelRow.setInterviewCompletedAt(level.getCompletedAt());
+
+					if (level.getInterviewerUserId() != null) {
+						levelRow.setInterviewerUserId(level.getInterviewerUserId());
+						UserAccount user = userMap.get(level.getInterviewerUserId());
+						if (user != null) {
+							levelRow.setInterviewerEmail(user.getEmail());
+							if (user.getEmployeeId() != null) {
+								Employee emp = employeeMap.get(user.getEmployeeId());
+								if (emp != null) {
+									levelRow.setInterviewerName(emp.getFirstName() + " " + emp.getLastName());
+								}
+							}
+							if (levelRow.getInterviewerName() == null) {
+								levelRow.setInterviewerName(user.getEmail());
+							}
+						}
+					}
+
+					flatRows.add(levelRow);
+				}
+			}
+		}
+	}
+
+	private List<LevelProgressDto> readProgress(String json) {
+		try {
+			if (json == null || json.isBlank()) {
+				return new ArrayList<>();
+			}
+			return om.readValue(json, new TypeReference<List<LevelProgressDto>>() {
+			});
+		} catch (Exception e) {
+			return new ArrayList<>();
+		}
+	}
+
+	private GroupFlowDto copyBaseRow(GroupFlowDto base) {
+		GroupFlowDto copy = new GroupFlowDto();
+
+		copy.setGroupId(base.getGroupId());
+		copy.setGroupTitle(base.getGroupTitle());
+		copy.setGroupCreatedAt(base.getGroupCreatedAt());
+		copy.setGroupTotalRequested(base.getGroupTotalRequested());
+		copy.setGroupStatus(base.getGroupStatus());
+
+		copy.setGroupCreatorUserId(base.getGroupCreatorUserId());
+		copy.setGroupCreatorName(base.getGroupCreatorName());
+		copy.setGroupCreatorEmail(base.getGroupCreatorEmail());
+
+		copy.setCompanyId(base.getCompanyId());
+		copy.setCompanyName(base.getCompanyName());
+		copy.setProjectId(base.getProjectId());
+		copy.setProjectName(base.getProjectName());
+		copy.setAccountId(base.getAccountId());
+		copy.setAccountName(base.getAccountName());
+		copy.setDemandOpenDt(base.getDemandOpenDt());
+		copy.setFulfilmentDt(base.getFulfilmentDt());
+		copy.setActualFulfilmentDt(base.getActualFulfilmentDt());
+		copy.setFulfilledWithinTarget(base.getFulfilledWithinTarget());
+		copy.setPriority(base.getPriority());
+		copy.setRoleDuration(base.getRoleDuration());
+		copy.setDescription(base.getDescription());
+		copy.setSummaryTotalRequests(base.getSummaryTotalRequests());
+		copy.setSummaryOpen(base.getSummaryOpen());
+		copy.setSummaryInterviewing(base.getSummaryInterviewing());
+		copy.setSummarySelected(base.getSummarySelected());
+		copy.setSummaryAllocated(base.getSummaryAllocated());
+		copy.setSummaryOnboarded(base.getSummaryOnboarded());
+		copy.setSummaryRejected(base.getSummaryRejected());
+		copy.setSummaryTotalInterviews(base.getSummaryTotalInterviews());
+		copy.setSummaryPendingDays(base.getSummaryPendingDays());
+
+		copy.setRequestId(base.getRequestId());
+		copy.setRequestStatus(base.getRequestStatus());
+
+		copy.setInterviewId(base.getInterviewId());
+		copy.setInterviewOverallStatus(base.getInterviewOverallStatus());
+
+		copy.setResourceType(base.getResourceType());
+		copy.setCandidateId(base.getCandidateId());
+		copy.setCandidateEmployeeId(base.getCandidateEmployeeId());
+		copy.setCandidateName(base.getCandidateName());
+		copy.setCandidateEmail(base.getCandidateEmail());
+		copy.setCandidatePhoneNumber(base.getCandidatePhoneNumber());
+		copy.setCandidateResumeStatus(base.getCandidateResumeStatus());
+		copy.setCandidateDesignation(base.getCandidateDesignation());
+		copy.setCandidateExperience(base.getCandidateExperience());
+
+		copy.setAllocationId(base.getAllocationId());
+		copy.setAllocationEmployeeName(base.getAllocationEmployeeName());
+		copy.setAllocationStartDate(base.getAllocationStartDate());
+		copy.setAllocationEndDate(base.getAllocationEndDate());
+		copy.setAllocationProjectRole(base.getAllocationProjectRole());
+		copy.setAllocationIsBillable(base.getAllocationIsBillable());
+
+		copy.setInterviewLevel(base.getInterviewLevel());
+		copy.setInterviewLevelStatus(base.getInterviewLevelStatus());
+		copy.setInterviewNotes(base.getInterviewNotes());
+		copy.setInterviewCompletedAt(base.getInterviewCompletedAt());
+		copy.setInterviewerUserId(base.getInterviewerUserId());
+		copy.setInterviewerName(base.getInterviewerName());
+		copy.setInterviewerEmail(base.getInterviewerEmail());
+
+		return copy;
+	}
+
+	private String buildDateRangeText(String fromDate, String toDate) {
+		LocalDate start = parseFlexibleDate(fromDate);
+		LocalDate end = parseFlexibleDate(toDate);
+
+		if (start != null && end != null) {
+			if (start.equals(end)) {
+
+				return start.toString();
+			}
+
+			return start.toString() + " to " + end.toString();
+		}
+		if (start != null) {
+			return start.toString() + " to End";
+		}
+		if (end != null) {
+			return "Start to " + end.toString();
+		}
+		return "All Time";
+	}
+
+	private LocalDate parseFlexibleDate(String dateStr) {
+		if (dateStr == null || dateStr.isBlank()) {
+			return null;
+		}
+
+		List<DateTimeFormatter> formatters = Arrays.asList(DateTimeFormatter.ISO_LOCAL_DATE,
+				DateTimeFormatter.ofPattern("M/d/yyyy"), DateTimeFormatter.ofPattern("d/M/yyyy"),
+				DateTimeFormatter.ofPattern("MM/dd/yyyy"), DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+				DateTimeFormatter.ofPattern("yyyy/MM/dd"));
+
+		for (DateTimeFormatter formatter : formatters) {
+			try {
+				return LocalDate.parse(dateStr, formatter);
+			} catch (DateTimeParseException e) {
+			}
+		}
+		return null;
+	}
+
+	// Helper 1: Scans Employee and Candidate documents for share history linked to this demand
+	private List<DemandResponseDto.ResumeShareInfo> getResumeShareInfos(Long demandId) {
+	    List<DemandResponseDto.ResumeShareInfo> results = new ArrayList<>();
+
+	    // 1. Process Employee Documents
+	    List<EmployeeDocument> empDocs = employeeDocumentRepo.findAll(); 
+	    for (EmployeeDocument doc : empDocs) {
+	        if (StringUtils.hasText(doc.getResumeShareMeta())) {
+	            parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getEmployeeId(), "EMPLOYEE");
+	        }
+	    }
+
+	    // 2. Process Candidate Documents
+	    List<CandidateDocument> candDocs = candidateDocumentRepo.findAll();
+	    for (CandidateDocument doc : candDocs) {
+	        if (StringUtils.hasText(doc.getResumeShareMeta())) {
+	            parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getCandidateId(), "CANDIDATE");
+	        }
+	    }
+	    
+	    return results;
+	}
+
+	// Helper 2: Parses the JSON history and extracts details if the demand matches
+	private void parseAndAddShareInfo(List<DemandResponseDto.ResumeShareInfo> results, String jsonMeta, Long targetDemandId, Long resourceId, String type) {
+		try {
+			if (!StringUtils.hasText(jsonMeta)) return;
+
+			List<ResumeShareDto> history = new ArrayList<>();
+			String trimmed = jsonMeta.trim();
+
+			// FIX: Handle both Single Object and List formats
+			if (trimmed.startsWith("[")) {
+				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
+			} else if (trimmed.startsWith("{")) {
+				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
+				history.add(single);
+			} else {
+				return;
+			}
+
+			if (history == null || history.isEmpty()) return;
+
+			for (ResumeShareDto share : history) {
+				boolean isMatch = false;
+
+				// Check 1: Look in the 'demandIds' list (if populated)
+				if (share.getDemandIds() != null && share.getDemandIds().contains(targetDemandId)) {
+					isMatch = true;
+				}
+
+				// Check 2: Look in the 'sharedWith' details list (where your data actually is)
+				if (!isMatch && share.getSharedWith() != null) {
+					for (Map<String, Object> detail : share.getSharedWith()) {
+						Object dIdObj = detail.get("demandId");
+						if (dIdObj != null) {
+							try {
+								Long dId = Long.valueOf(dIdObj.toString());
+								if (dId.equals(targetDemandId)) {
+									isMatch = true;
+									break;
+								}
+							} catch (NumberFormatException e) {
+								// ignore invalid numbers
+							}
+						}
+					}
+				}
+
+				if (isMatch) {
+					DemandResponseDto.ResumeShareInfo info = new DemandResponseDto.ResumeShareInfo();
+					info.setResourceId(resourceId);
+					info.setResourceType(type);
+					
+					// Use the 'sharedAt' from the inner detail if available, otherwise the main action time
+					info.setSharedAt(share.getActionAt());
+					if (share.getSharedWith() != null) {
+						for (Map<String, Object> detail : share.getSharedWith()) {
+							if (targetDemandId.equals(asLong(detail.get("demandId")))) {
+								String specificDate = (String) detail.get("sharedAt");
+								if (specificDate != null) {
+									try {
+										info.setSharedAt(OffsetDateTime.parse(specificDate));
+									} catch(Exception e) {}
+								}
+								break;
+							}
+						}
+					}
+
+					// Resolve "Shared By" User
+					if (share.getActionByUserId() != null) {
+						userAccountRepo.findById(share.getActionByUserId()).ifPresent(u -> {
+							info.setSharedByEmail(u.getEmail());
+							if (u.getEmployeeId() != null) {
+								employeeRepo.findById(u.getEmployeeId()).ifPresent(e -> 
+									info.setSharedBy(e.getFirstName() + " " + e.getLastName())
+								);
+							}
+							if (info.getSharedBy() == null) info.setSharedBy(u.getEmail());
+						});
+					} else if (share.getActionByUserName() != null) {
+						info.setSharedBy(share.getActionByUserName());
+					}
+
+					// Resolve Resource Name
+					if ("EMPLOYEE".equals(type)) {
+						employeeRepo.findById(resourceId).ifPresent(e -> {
+							info.setResourceName(e.getFirstName() + " " + e.getLastName());
+							info.setResourceEmail(e.getEmail());
+						});
+					} else {
+						candidateRepo.findById(resourceId).ifPresent(c -> {
+							info.setResourceName(c.getFirstName() + " " + c.getLastName());
+							info.setResourceEmail(c.getEmail());
+						});
+					}
+					
+					results.add(info);
+				}
+			}
+		} catch (Exception e) {
+			log.warn("Failed to parse resume share meta for {} {}: {}", type, resourceId, e.getMessage());
+		}
+	}
+
+    // Small helper to safely cast object to Long
+	private Long asLong(Object o) {
+		if (o == null) return null;
+		if (o instanceof Number) return ((Number) o).longValue();
+		try {
+			return Long.valueOf(o.toString());
+		} catch (Exception e) {
+			return null;
+		}
+	}
+}

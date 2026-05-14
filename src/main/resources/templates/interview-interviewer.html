@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>{{headline}}</title>
+</head>
+<body style="margin:0;padding:0;background:#ffffff;color:#1f2937;font-family:Segoe UI,Roboto,Arial,sans-serif;line-height:1.65;">
+
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+    <tr>
+      <td align="center" style="padding:48px 16px;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="720" style="width:720px;max-width:100%;">
+
+          <tr>
+            <!-- Vertical accent -->
+            <td width="14" style="background:linear-gradient(180deg,#0e9aa7,#006d77);"></td>
+
+            <!-- Content -->
+            <td style="padding:0 0 0 28px;">
+              <!-- Title -->
+              <div style="padding:6px 0 4px 0;">
+                <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#6b7280;">
+                  {{kicker}}
+                </div>
+                <div style="font-size:26px;font-weight:800;color:#0e9aa7;line-height:1.25;margin-top:6px;">
+                  {{headline}}
+                </div>
+              </div>
+
+              <!-- Intro -->
+              <div style="font-size:15px;margin-top:18px;">
+                <p style="margin:0 0 14px 0;">
+                  Dear <span style="color:#006d77;font-weight:700;">{{interviewerName}}</span>,
+                </p>
+                <p style="margin:0 0 14px 0;">
+                  {{intro}}
+                </p>
+              </div>
+
+              <!-- Facts -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:10px 0 6px 0;">
+                <tr>
+                  <td style="padding:6px 0;width:170px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Date</td>
+                  <td style="padding:6px 0;font-size:15px;font-weight:600;color:#0b3d75;">{{interviewDateOnly}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Time</td>
+                  <td style="padding:6px 0;font-size:15px;font-weight:600;color:#0b3d75;">{{interviewTimeOnly}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Account</td>
+                  <td style="padding:6px 0;font-size:15px;">{{accountName}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Project</td>
+                  <td style="padding:6px 0;font-size:15px;">{{projectName}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Interview Type</td>
+                  <td style="padding:6px 0;font-size:15px;">{{interviewType}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:.06em;">Candidate</td>
+                  <td style="padding:6px 0;font-size:15px;">{{candidateName}}</td>
+                </tr>
+              </table>
+
+              <!-- Guidance -->
+              <div style="font-size:15px;margin-top:10px;">
+                <p style="margin:0 0 12px 0;">{{note}}</p>
+                <p style="margin:0 0 0 0;">
+                  Regards,<br>
+                  <strong>{{companyName}} • HR</strong>
+                </p>
+              </div>
+
+              <!-- Divider -->
+              <div style="height:1px;background:#e5eef3;margin:28px 0 18px 0;"></div>
+
+              <!-- Footer -->
+              <div style="text-align:center;">
+                <img src="cid:companyLogo" alt="RIS Logo" style="width:110px;height:auto;display:block;margin:0 auto 6px auto;">
+                <div style="font-size:13px;color:#6b7280;"><strong>{{companyName}}</strong></div>
+              </div>
+
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

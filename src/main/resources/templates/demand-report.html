@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Demand Pipeline </title>
+  <style>
+    body { margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f4f6; }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:24px 0;">
+    <tr>
+      <td align="center">
+
+       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:24px 0;">
+  <tr>
+    <!-- LEFT align instead of center -->
+    <td align="left" style="padding-left:24px;">
+
+      <!-- Card now full-width up to 900px, aligned left -->
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="max-width:900px;background-color:#ffffff;border-radius:10px;
+                    border:1px solid #e5e7eb;box-shadow:0 4px 10px rgba(15,23,42,0.12);
+                    padding:20px;">
+
+                <!-- HEADER SECTION UPDATED STARTS -->
+                <tr>
+                  <td colspan="2" style="padding-bottom: 20px; border-bottom: 1px solid #e5e7eb;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <!-- Everything Centered: Logo on top, Title below -->
+                        <td align="center" style="text-align:center;">
+                          
+                          <!-- Logo Centered -->
+                          <img src="cid:companyLogo" alt="RIS" width="50" style="display:block; margin: 0 auto 12px auto; border-radius: 4px;" />
+                          
+                          <!-- Title Centered -->
+                          <h2 style="margin:0;font-size:20px;color:#111827;text-transform:uppercase;">
+                            Demand Details  
+                          </h2>
+                          <p style="margin:4px 0 0 0;font-size:12px;color:#6b7280;">
+                            Snapshot for period: <strong>{{DATE_RANGE}}</strong>
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <!-- HEADER SECTION UPDATED ENDS -->
+          <tr>
+            <td colspan="2" style="padding-top:16px;">
+              <div style="font-size:12px;color:#4b5563;margin-bottom:6px;">
+                <strong>Section 1:</strong> Demand Summary
+              </div>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                     style="border-collapse:collapse;font-size:12px;">
+                <thead>
+                  <tr style="background:linear-gradient(90deg,#e0f2fe,#eef2ff);color:#111827;">
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Demand</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Account</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Dates</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Requests</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Pipeline Summary</th>
+					<th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Employees (Resumes)</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #cbd5f5;">Resume Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{SECTION_1_ROWS}}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td colspan="2" style="padding-top:20px;">
+              <div style="font-size:12px;color:#4b5563;margin-bottom:6px;">
+                <strong>Section 2:</strong> Pipeline  (Request / Candidate level)
+              </div>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                     style="border-collapse:collapse;font-size:12px;">
+					 
+                <thead>
+                  <tr style="background:#111827;color:#f9fafb;">
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Demand</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Request ID</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Candidate</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Interview Status</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Allocated</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Onboarded</th>
+                    <th align="left" style="padding:8px 10px;border-bottom:1px solid #374151;">Resume</th>
+                  </tr>
+                </thead>
+                <tbody>
+                   {{SECTION_2_ROWS}}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td colspan="2" style="padding-top:14px;">
+              <p style="margin:0;font-size:10px;color:#9ca3af;">
+                Generated automatically from RMS.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -108,7 +108,7 @@ public class DemandController {
 	}
 
 	@PutMapping("/{id}")
-	public ResponseEntity<Map<String, Object>> updateDemand(@PathVariable Long id, @RequestBody DemandCreateDto dto) {
+	public ResponseEntity<Map<String, Object>> updateDemand(@PathVariable Long id, @Valid @RequestBody DemandCreateDto dto) {
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			DemandResponseDto updated = demandService.updateDemand(id, dto);

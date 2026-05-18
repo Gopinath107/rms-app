@@ -39,6 +39,7 @@ import lombok.RequiredArgsConstructor;
 public class EmployeeController {
 
 	private final EmployeeService service;
+	private final jakarta.validation.Validator validator;
 
 	@PostMapping(path = "/create", consumes = "multipart/form-data", produces = "application/json")
 	public ResponseEntity<Map<String, Object>> createMultipart(@RequestParam Long companyId,
@@ -170,6 +171,20 @@ public class EmployeeController {
 			if (socialLinks != null && !socialLinks.isBlank()) {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
 			}
+
+			java.util.Set<jakarta.validation.ConstraintViolation<EmployeeDto>> violations = validator.validate(dto);
+			if (!violations.isEmpty()) {
+				java.util.List<String> errorMessages = new java.util.ArrayList<>();
+				for (jakarta.validation.ConstraintViolation<EmployeeDto> violation : violations) {
+					errorMessages.add(violation.getPropertyPath() + ": " + violation.getMessage());
+				}
+				resp.put("result", null);
+				resp.put("success", false);
+				resp.put("errors", errorMessages);
+				resp.put("errorCount", errorMessages.size());
+				return org.springframework.http.ResponseEntity.badRequest().body(resp);
+			}
+
 			var saved = service.create(dto, resume, documentFiles, documentData);
 
 			resp.put("result", saved);
@@ -347,6 +362,19 @@ public class EmployeeController {
 			}
 			if (socialLinks != null && !socialLinks.isBlank()) {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
+			}
+
+			java.util.Set<jakarta.validation.ConstraintViolation<EmployeeDto>> violations = validator.validate(dto);
+			if (!violations.isEmpty()) {
+				java.util.List<String> errorMessages = new java.util.ArrayList<>();
+				for (jakarta.validation.ConstraintViolation<EmployeeDto> violation : violations) {
+					errorMessages.add(violation.getPropertyPath() + ": " + violation.getMessage());
+				}
+				resp.put("result", null);
+				resp.put("success", false);
+				resp.put("errors", errorMessages);
+				resp.put("errorCount", errorMessages.size());
+				return org.springframework.http.ResponseEntity.badRequest().body(resp);
 			}
 
 			EmployeeDto updated = service.update(employeeId, dto, resume, documentFiles, documentData);

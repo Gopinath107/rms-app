@@ -134,6 +134,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 		validateCompanyAndDepartmentForCreate(dto);
 		validateUniqueEmail(dto.getCompanyId(), dto.getEmail());
 		validateUniquePersonalEmail(dto.getCompanyId(), dto.getPersonalEmailId());
+		if (dto.getDateOfBirth() != null) validateDateOfBirth(dto.getDateOfBirth());
 
 		Employee entity = toEntity(dto);
 		entity.setEmployeeId(null);
@@ -445,8 +446,10 @@ public class EmployeeServiceImpl implements EmployeeService {
 			existing.setPersonalemailid(dto.getPersonalEmailId());
 		}
 		// Identity
-		if (dto.getDateOfBirth() != null)
+		if (dto.getDateOfBirth() != null) {
+			validateDateOfBirth(dto.getDateOfBirth());
 			existing.setDateOfBirth(dto.getDateOfBirth());
+		}
 		if (dto.getCountryOfCitizenship() != null)
 			existing.setCountryOfCitizenship(dto.getCountryOfCitizenship());
 		if (dto.getDocumentType() != null)
@@ -881,6 +884,17 @@ public class EmployeeServiceImpl implements EmployeeService {
 					.orElseThrow(() -> new IllegalArgumentException("Department not found"));
 			if (!dep.getCompanyId().equals(dto.getCompanyId()))
 				throw new IllegalArgumentException("Department must belong to the same company");
+		}
+	}
+
+	private void validateDateOfBirth(java.time.LocalDate dob) {
+		if (dob == null) return;
+		java.time.LocalDate today = java.time.LocalDate.now();
+		if (!dob.isBefore(today)) {
+			throw new IllegalArgumentException("Date of birth cannot be today or a future date.");
+		}
+		if (dob.isAfter(today.minusYears(5))) {
+			throw new IllegalArgumentException("Date of birth must be at least 5 years before today.");
 		}
 	}
 

@@ -50,6 +50,7 @@ import com.documents4j.job.LocalConverter;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ris.rms.dto.CandidateDto;
+import com.ris.rms.dto.EmployeeDocumentDto;
 import com.ris.rms.dto.ImportResultDto;
 import com.ris.rms.dto.ResumeShareDto;
 import com.ris.rms.entity.Account;
@@ -156,6 +157,10 @@ public class CandidateServiceImpl implements CandidateService {
 				}
 			};
 			return new ResumeStorageService.ResumeResource(pdfRes, "application/pdf", pdfName);
+		} catch (Exception ex) {
+			log.warn("Resume preview conversion failed for candidate {}. Serving original file instead. Cause: {}",
+					candidateId, ex.getMessage());
+			return original;
 		} finally {
 			if (converter != null) {
 				try {
@@ -401,7 +406,7 @@ public class CandidateServiceImpl implements CandidateService {
 	}
 
 	@Override
-	public CandidateDto create(CandidateDto dto, MultipartFile resume) throws Exception {
+	public CandidateDto create(CandidateDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws Exception {
 		if (dto.getCompanyId() == null) {
 			throw new IllegalArgumentException("companyId is required for Candidate");
 		}
@@ -422,12 +427,13 @@ public class CandidateServiceImpl implements CandidateService {
 			validateResume(resume);
 			storeCandidateResumeDocument(saved, resume, 1);
 		}
+		storeAdditionalCandidateDocuments(saved, documentFiles, documentData);
 
 		return buildOutputDto(saved);
 	}
 
 	@Override
-	public CandidateDto update(Long id, CandidateDto dto, MultipartFile resume) throws Exception {
+	public CandidateDto update(Long id, CandidateDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws Exception {
 		Candidate existing = candidateRepo.findById(id)
 				.orElseThrow(() -> new IllegalArgumentException("Candidate not found: " + id));
 
@@ -510,6 +516,7 @@ public class CandidateServiceImpl implements CandidateService {
 
 			storeCandidateResumeDocument(saved, resume, oldVersion + 1);
 		}
+		storeAdditionalCandidateDocuments(saved, documentFiles, documentData);
 
 		return buildOutputDto(saved);
 	}
@@ -636,7 +643,7 @@ public class CandidateServiceImpl implements CandidateService {
 
 		for (CandidateDto dto : candidatesToCreate) {
 			try {
-				create(dto, null);
+				create(dto, null, null, null);
 				result.setSuccessCount(result.getSuccessCount() + 1);
 			} catch (Exception e) {
 				result.setFailureCount(result.getFailureCount() + 1);
@@ -1101,6 +1108,7 @@ public class CandidateServiceImpl implements CandidateService {
 
 	private void fillResumeFields(CandidateDto dto) {
 		CandidateDocument primary = candidateDocumentRepo.findPrimaryResume(dto.getCandidateId()).orElse(null);
+		dto.setDocuments(loadCandidateDocuments(dto.getCandidateId()));
 
 		if (primary == null) {
 			dto.setResumeShareAudit(List.of());
@@ -1144,6 +1152,74 @@ public class CandidateServiceImpl implements CandidateService {
 		} else {
 			dto.setResumeShareAudit(List.of());
 		}
+	}
+
+	private void storeAdditionalCandidateDocuments(Candidate candidate, List<MultipartFile> documentFiles, String documentData) throws Exception {
+		if (candidate == null || candidate.getCandidateId() == null) return;
+		if (documentFiles == null || documentFiles.isEmpty()) return;
+
+		List<Map<String, Object>> metaMaps = List.of();
+		if (documentData != null && !documentData.isBlank()) {
+			try {
+				metaMaps = OM.readValue(documentData, new TypeReference<List<Map<String, Object>>>() {});
+			} catch (Exception e) {
+				log.warn("Invalid candidate documentData JSON, continuing with file names only. Cause: {}", e.getMessage());
+			}
+		}
+
+		for (int i = 0; i < documentFiles.size(); i++) {
+			MultipartFile file = documentFiles.get(i);
+			if (file == null || file.isEmpty()) continue;
+
+			Map<String, Object> rawMeta = i < metaMaps.size() ? metaMaps.get(i) : Map.of();
+			String docType = stringVal(rawMeta.get("documentType"));
+			if (docType == null || docType.isBlank()) docType = "Document";
+			if ("resume".equalsIgnoreCase(docType)) continue;
+
+			String preferredName = stringVal(rawMeta.get("documentName"));
+			String uploadName = (preferredName != null && !preferredName.isBlank()) ? preferredName : file.getOriginalFilename();
+			String mime = (file.getContentType() != null && !file.getContentType().isBlank())
+					? file.getContentType()
+					: "application/octet-stream";
+
+			var stored = storage.upload(candidate.getCandidateId(), uploadName, mime, file.getInputStream(), file.getSize());
+
+			CandidateDocument doc = new CandidateDocument();
+			doc.setCandidateId(candidate.getCandidateId());
+			doc.setDocumentName(stored.fileName());
+			doc.setFilePath(stored.url());
+			doc.setDocumentType(docType);
+			doc.setMimeType(mime);
+			doc.setSizeBytes(stored.sizeBytes());
+			doc.setStorageProvider(stored.storageProvider());
+			doc.setStorageKey(stored.key());
+			doc.setIsPrimary(false);
+			doc.setVersion(1);
+			doc.setResumeShareMeta(null);
+			doc.setResumeShareStatus(null);
+			candidateDocumentRepo.save(doc);
+		}
+	}
+
+	private String stringVal(Object value) {
+		return value == null ? null : String.valueOf(value).trim();
+	}
+
+	private List<EmployeeDocumentDto> loadCandidateDocuments(Long candidateId) {
+		if (candidateId == null) return List.of();
+		return candidateDocumentRepo.findByCandidateIdOrderByDocumentIdDesc(candidateId).stream().map(doc -> {
+			EmployeeDocumentDto dto = new EmployeeDocumentDto();
+			dto.setDocumentId(doc.getDocumentId());
+			dto.setDocumentType(doc.getDocumentType());
+			dto.setFileName(doc.getDocumentName());
+			dto.setUrl(doc.getFilePath());
+			dto.setMimeType(doc.getMimeType());
+			dto.setSizeBytes(doc.getSizeBytes());
+			dto.setUploadedAt(doc.getUploadedAt() != null ? doc.getUploadedAt().toString() : null);
+			dto.setIsPrimary(doc.getIsPrimary());
+			dto.setVersion(doc.getVersion());
+			return dto;
+		}).toList();
 	}
 
 	private static String replaceExt(String name, String ext) {

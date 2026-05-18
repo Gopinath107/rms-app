@@ -17,11 +17,11 @@ public interface EmployeeService {
 
 	List<EmployeeDto> list(Long companyId, String q, String status, Long departmentId, Integer page, Integer size);
 
-	EmployeeDto update(Long id, EmployeeDto dto, MultipartFile resume) throws IOException, Exception;
+	EmployeeDto update(Long id, EmployeeDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws IOException, Exception;
 	
 	void delete(Long id);
 	
-	EmployeeDto create(EmployeeDto dto, org.springframework.web.multipart.MultipartFile resume) throws IOException, Exception;
+	EmployeeDto create(EmployeeDto dto, org.springframework.web.multipart.MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws IOException, Exception;
 
 	ResumeResource getResumeByEmployeeId(Long employeeId) throws Exception;
 	

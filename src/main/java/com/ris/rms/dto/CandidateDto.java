@@ -59,6 +59,7 @@ public class CandidateDto {
 	private String resumeShareActionByUserName;
 	private String resumeShareActionAt;
 	private List<Map<String, Object>> resumeShareAudit;
+	private List<EmployeeDocumentDto> documents;
 	private OffsetDateTime createdAt;
 	private OffsetDateTime updatedAt;
 	

@@ -92,6 +92,7 @@ public class EmployeeDto {
 	private String resumeShareActionByUserName;
 	private String resumeShareActionAt;
 	private List<Map<String, Object>> resumeShareAudit;
+	private List<EmployeeDocumentDto> documents;
 
 	@Size(max = 20)
 	private String gender;

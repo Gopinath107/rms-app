@@ -48,12 +48,14 @@ public class CandidateController {
 			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
 			@RequestParam(value = "primarySkills", required = false) String primarySkills,
 			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
-			@RequestPart(value = "resume", required = false) MultipartFile resume) {
+			@RequestPart(value = "resume", required = false) MultipartFile resume,
+			@RequestPart(value = "documentFiles", required = false) List<MultipartFile> documentFiles,
+			@RequestParam(value = "documentData", required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
-			CandidateDto result = candidateService.create(dto, resume);
+			CandidateDto result = candidateService.create(dto, resume, documentFiles, documentData);
 			resp.put("result", result);
 			resp.put("success", true);
 			resp.put("errors", List.of());
@@ -74,7 +76,9 @@ public class CandidateController {
 			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
 			@RequestParam(value = "primarySkills", required = false) String primarySkills,
 			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
-			@RequestPart(value = "resume", required = false) MultipartFile resume) {
+			@RequestPart(value = "resume", required = false) MultipartFile resume,
+			@RequestPart(value = "documentFiles", required = false) List<MultipartFile> documentFiles,
+			@RequestParam(value = "documentData", required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
@@ -84,7 +88,7 @@ public class CandidateController {
 				throw new IllegalArgumentException("candidateId is required for update");
 			}
 
-			CandidateDto result = candidateService.update(id, dto, resume);
+			CandidateDto result = candidateService.update(id, dto, resume, documentFiles, documentData);
 			resp.put("result", result);
 			resp.put("success", true);
 			resp.put("errors", List.of());

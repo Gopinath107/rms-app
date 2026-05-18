@@ -54,6 +54,7 @@ import com.documents4j.api.IConverter;
 import com.documents4j.job.LocalConverter;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ris.rms.dto.EmployeeDocumentDto;
 import com.ris.rms.dto.EmployeeDto;
 import com.ris.rms.dto.ImportResultDto;
 import com.ris.rms.dto.ProjectHistoryDto;
@@ -129,7 +130,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 	private static final long MAX_RESUME_BYTES = 10L * 1024 * 1024;
 
 	@Override
-	public EmployeeDto create(EmployeeDto dto, MultipartFile resume) throws IOException, Exception {
+	public EmployeeDto create(EmployeeDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws IOException, Exception {
 		validateCompanyAndDepartmentForCreate(dto);
 		validateUniqueEmail(dto.getCompanyId(), dto.getEmail());
 		validateUniquePersonalEmail(dto.getCompanyId(), dto.getPersonalEmailId());
@@ -145,6 +146,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 			validateResume(resume);
 			storeResumeDocument(saved, resume, 1);
 		}
+		storeAdditionalEmployeeDocuments(saved, documentFiles, documentData);
 
 		return buildOutputDto(saved, dto);
 	}
@@ -228,6 +230,12 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 			out.setCurrentProjectId(lastProjectId);
 			out.setCurrentAccountId(lastAccountId);
+		} else {
+			out.setCurrentProjectId(e.getCurrentProjectId());
+			out.setCurrentAccountId(e.getCurrentAccountId());
+			if (e.getCurrentAccountId() != null) {
+				accountRepo.findById(e.getCurrentAccountId()).ifPresent(a -> out.setCurrentClient(a.getAccountName()));
+			}
 		}
 
 		return out;
@@ -354,11 +362,17 @@ public class EmployeeServiceImpl implements EmployeeService {
 					skillIdsMap.get(e.getEmployeeId()), skillNamesMap.get(e.getEmployeeId()));
 
 			List<ProjectHistoryDto> hist = historyByEmp.get(e.getEmployeeId());
+			Long fallbackProjectId = e.getCurrentProjectId();
+			Long fallbackAccountId = e.getCurrentAccountId();
+			String fallbackClient = null;
+			if (fallbackAccountId != null) {
+				fallbackClient = accountRepo.findById(fallbackAccountId).map(Account::getAccountName).orElse(null);
+			}
 			dto.setProjectHistory(hist != null ? hist : List.of());
-			dto.setCurrentClient(currentClientByEmp.getOrDefault(e.getEmployeeId(), "N/A"));
+			dto.setCurrentClient(currentClientByEmp.getOrDefault(e.getEmployeeId(), fallbackClient != null ? fallbackClient : "N/A"));
 			dto.setCurrentProject(currentProjectByEmp.getOrDefault(e.getEmployeeId(), "N/A"));
-			dto.setCurrentProjectId(currentProjectIdByEmp.get(e.getEmployeeId()));
-			dto.setCurrentAccountId(currentAccountIdByEmp.get(e.getEmployeeId()));
+			dto.setCurrentProjectId(currentProjectIdByEmp.getOrDefault(e.getEmployeeId(), fallbackProjectId));
+			dto.setCurrentAccountId(currentAccountIdByEmp.getOrDefault(e.getEmployeeId(), fallbackAccountId));
 			fillResumeFields(dto);
 			return dto;
 		}).collect(Collectors.toList());
@@ -375,7 +389,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 	}
 
 	@Override
-	public EmployeeDto update(Long id, EmployeeDto dto, MultipartFile resume) throws IOException, Exception {
+	public EmployeeDto update(Long id, EmployeeDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws IOException, Exception {
 		Employee existing = repo.findById(id).orElseThrow(() -> new IllegalArgumentException("Employee not found"));
 
 		if (dto.getCompanyId() != null && !dto.getCompanyId().equals(existing.getCompanyId())) {
@@ -417,6 +431,10 @@ public class EmployeeServiceImpl implements EmployeeService {
 			existing.setEmploymentType(dto.getEmploymentType());
 		if (dto.getStatus() != null)
 			existing.setStatus(dto.getStatus());
+		if (dto.getCurrentProjectId() != null)
+			existing.setCurrentProjectId(dto.getCurrentProjectId());
+		if (dto.getCurrentAccountId() != null)
+			existing.setCurrentAccountId(dto.getCurrentAccountId());
 		if (dto.getJobTitle() != null)
 			existing.setJobTitle(dto.getJobTitle());
 		if (dto.getGender() != null)
@@ -522,6 +540,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 			}).orElse(0);
 			storeResumeDocument(saved, resume, oldVersion + 1);
 		}
+		storeAdditionalEmployeeDocuments(saved, documentFiles, documentData);
 
 		return buildOutputDto(saved, dto);
 	}
@@ -578,6 +597,10 @@ public class EmployeeServiceImpl implements EmployeeService {
 				}
 			};
 			return new ResumeStorageService.ResumeResource(pdfRes, "application/pdf", pdfName);
+		} catch (Exception ex) {
+			log.warn("Resume preview conversion failed for employee {}. Serving original file instead. Cause: {}",
+					employeeId, ex.getMessage());
+			return original;
 		} finally {
 			if (converter != null) {
 				try {
@@ -615,7 +638,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 		for (EmployeeDto dto : employeesToCreate) {
 			try {
-				self.create(dto, null);
+				self.create(dto, null, null, null);
 				result.setSuccessCount(result.getSuccessCount() + 1);
 			} catch (Exception e) {
 				result.setFailureCount(result.getFailureCount() + 1);
@@ -1061,6 +1084,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 	private void fillResumeFields(EmployeeDto dto) {
 		var primary = employeeDocumentRepo.findPrimaryResume(dto.getEmployeeId()).orElse(null);
+		dto.setDocuments(loadEmployeeDocuments(dto.getEmployeeId()));
 		if (primary == null) {
 			dto.setResumeShareAudit(List.of());
 			return;
@@ -1099,6 +1123,74 @@ public class EmployeeServiceImpl implements EmployeeService {
 		} else {
 			dto.setResumeShareAudit(List.of());
 		}
+	}
+
+	private void storeAdditionalEmployeeDocuments(Employee saved, List<MultipartFile> documentFiles, String documentData) throws Exception {
+		if (saved == null || saved.getEmployeeId() == null) return;
+		if (documentFiles == null || documentFiles.isEmpty()) return;
+
+		List<Map<String, Object>> metaMaps = List.of();
+		if (documentData != null && !documentData.isBlank()) {
+			try {
+				metaMaps = OM.readValue(documentData, new TypeReference<List<Map<String, Object>>>() {});
+			} catch (Exception e) {
+				log.warn("Invalid employee documentData JSON, continuing with file names only. Cause: {}", e.getMessage());
+			}
+		}
+
+		for (int i = 0; i < documentFiles.size(); i++) {
+			MultipartFile file = documentFiles.get(i);
+			if (file == null || file.isEmpty()) continue;
+
+			Map<String, Object> rawMeta = i < metaMaps.size() ? metaMaps.get(i) : Map.of();
+			String docType = stringVal(rawMeta.get("documentType"));
+			if (docType == null || docType.isBlank()) docType = "Document";
+			if ("resume".equalsIgnoreCase(docType)) continue;
+
+			String preferredName = stringVal(rawMeta.get("documentName"));
+			String uploadName = (preferredName != null && !preferredName.isBlank()) ? preferredName : file.getOriginalFilename();
+			String mime = (file.getContentType() != null && !file.getContentType().isBlank())
+					? file.getContentType()
+					: "application/octet-stream";
+
+			var stored = storage.upload(saved.getEmployeeId(), uploadName, mime, file.getInputStream(), file.getSize());
+
+			EmployeeDocument doc = new EmployeeDocument();
+			doc.setEmployeeId(saved.getEmployeeId());
+			doc.setDocumentName(stored.fileName());
+			doc.setFilePath(stored.url());
+			doc.setDocumentType(docType);
+			doc.setMimeType(mime);
+			doc.setSizeBytes(stored.sizeBytes());
+			doc.setStorageProvider(stored.storageProvider());
+			doc.setStorageKey(stored.key());
+			doc.setIsPrimary(false);
+			doc.setVersion(1);
+			doc.setResumeShareMeta(null);
+			doc.setResumeShareStatus(null);
+			employeeDocumentRepo.save(doc);
+		}
+	}
+
+	private String stringVal(Object value) {
+		return value == null ? null : String.valueOf(value).trim();
+	}
+
+	private List<EmployeeDocumentDto> loadEmployeeDocuments(Long employeeId) {
+		if (employeeId == null) return List.of();
+		return employeeDocumentRepo.findByEmployeeIdOrderByDocumentIdDesc(employeeId).stream().map(doc -> {
+			EmployeeDocumentDto dto = new EmployeeDocumentDto();
+			dto.setDocumentId(doc.getDocumentId());
+			dto.setDocumentType(doc.getDocumentType());
+			dto.setFileName(doc.getDocumentName());
+			dto.setUrl(doc.getFilePath());
+			dto.setMimeType(doc.getMimeType());
+			dto.setSizeBytes(doc.getSizeBytes());
+			dto.setUploadedAt(doc.getUploadedAt() != null ? doc.getUploadedAt().toString() : null);
+			dto.setIsPrimary(doc.getIsPrimary());
+			dto.setVersion(doc.getVersion());
+			return dto;
+		}).toList();
 	}
 
 	private static String replaceExt(String name, String ext) {
@@ -1207,6 +1299,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 		dto.setJoiningDate(e.getJoiningDate());
 		dto.setEmploymentType(e.getEmploymentType());
 		dto.setStatus(e.getStatus());
+		dto.setCurrentProjectId(e.getCurrentProjectId());
+		dto.setCurrentAccountId(e.getCurrentAccountId());
 		dto.setSkillIds(skillIds);
 		dto.setSkills(skills);
 		dto.setGender(e.getGender());
@@ -1280,6 +1374,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 		e.setJoiningDate(dto.getJoiningDate());
 		e.setEmploymentType(dto.getEmploymentType());
 		e.setStatus(dto.getStatus());
+		e.setCurrentProjectId(dto.getCurrentProjectId());
+		e.setCurrentAccountId(dto.getCurrentAccountId());
 		e.setGender(dto.getGender());
 		e.setPersonalemailid(dto.getPersonalEmailId());
 		// Identity

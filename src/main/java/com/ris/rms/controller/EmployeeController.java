@@ -92,7 +92,9 @@ public class EmployeeController {
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
 			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks) {
+			@RequestParam(required = false) String socialLinks,
+			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
+			@RequestParam(required = false) String documentData) {
 		var resp = new java.util.LinkedHashMap<String, Object>();
 		try {
 			var dto = new EmployeeDto();
@@ -168,7 +170,7 @@ public class EmployeeController {
 			if (socialLinks != null && !socialLinks.isBlank()) {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
 			}
-			var saved = service.create(dto, resume);
+			var saved = service.create(dto, resume, documentFiles, documentData);
 
 			resp.put("result", saved);
 			resp.put("success", true);
@@ -268,7 +270,9 @@ public class EmployeeController {
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
 			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks) {
+			@RequestParam(required = false) String socialLinks,
+			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
+			@RequestParam(required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
@@ -345,7 +349,7 @@ public class EmployeeController {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
 			}
 
-			EmployeeDto updated = service.update(employeeId, dto, resume);
+			EmployeeDto updated = service.update(employeeId, dto, resume, documentFiles, documentData);
 
 			resp.put("result", updated);
 			resp.put("success", true);

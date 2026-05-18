@@ -117,6 +117,8 @@ public class AuthServiceImpl implements AuthService {
 		String otp = String.format("%06d", new Random().nextInt(999999));
 		PasswordResetToken token = new PasswordResetToken();
 		token.setEmail(email.toLowerCase());
+
+		
 		token.setOtp(otp);
 		token.setExpiryDate(LocalDateTime.now().plusSeconds(90));
 		token.setIsUsed(false);

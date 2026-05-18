@@ -29,6 +29,28 @@ public class PasswordHashGenerator {
         return hexString.toString();
     }
 
+    public boolean verifyPassword(String rawPassword, String storedPassword) {
+        if (rawPassword == null || storedPassword == null) {
+            return false;
+        }
+        
+        // If stored is already a 64-char hex string (likely a SHA-256 hash)
+        if (isSha256Hash(storedPassword)) {
+            return storedPassword.equalsIgnoreCase(rawPassword);
+        }
+        
+        // Otherwise, assume stored is plain text and hash it for comparison
+        String hashedStored = generateHash(storedPassword);
+        return hashedStored.equalsIgnoreCase(rawPassword);
+    }
+
+    private boolean isSha256Hash(String str) {
+        if (str == null || str.length() != 64) {
+            return false;
+        }
+        return str.matches("^[0-9a-fA-F]{64}$");
+    }
+
     public static void main(String[] args) {
         if (args.length > 0) {
             for (String password : args) {

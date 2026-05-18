@@ -3,6 +3,9 @@ package com.ris.rms.controller;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -25,6 +28,8 @@ import com.ris.rms.dto.CandidateDto;
 import com.ris.rms.dto.ImportResultDto;
 import com.ris.rms.dto.ResumeShareDto;
 import com.ris.rms.service.CandidateService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -35,13 +40,19 @@ import lombok.RequiredArgsConstructor;
 public class CandidateController {
 
 	private final CandidateService candidateService;
+	private static final ObjectMapper OM = new ObjectMapper();
 
 	@PostMapping(value = "/create", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = "application/json")
 	public ResponseEntity<Map<String, Object>> createCandidate(@Valid @ModelAttribute CandidateDto dto,
+			@RequestParam(value = "skillIds", required = false) List<Long> skillIds,
+			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
+			@RequestParam(value = "primarySkills", required = false) String primarySkills,
+			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
 			@RequestPart(value = "resume", required = false) MultipartFile resume) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
+			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
 			CandidateDto result = candidateService.create(dto, resume);
 			resp.put("result", result);
 			resp.put("success", true);
@@ -59,10 +70,15 @@ public class CandidateController {
 
 	@PutMapping(value = "/update", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = "application/json")
 	public ResponseEntity<Map<String, Object>> updateCandidate(@Valid @ModelAttribute CandidateDto dto,
+			@RequestParam(value = "skillIds", required = false) List<Long> skillIds,
+			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
+			@RequestParam(value = "primarySkills", required = false) String primarySkills,
+			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
 			@RequestPart(value = "resume", required = false) MultipartFile resume) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
+			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
 			Long id = dto.getCandidateId();
 			if (id == null) {
 				throw new IllegalArgumentException("candidateId is required for update");
@@ -245,5 +261,36 @@ public class CandidateController {
 		if (msg == null || msg.isBlank())
 			return e.toString();
 		return msg;
+	}
+
+	private void applySkillPayload(CandidateDto dto, List<Long> skillIds, List<String> skillNames, String primarySkills,
+			String secondarySkills) {
+		if (skillIds != null && !skillIds.isEmpty()) {
+			dto.setSkillIds(skillIds);
+		}
+
+		Set<String> mergedNames = new LinkedHashSet<>();
+		if (skillNames != null) {
+			skillNames.stream().filter(s -> s != null && !s.isBlank()).map(String::trim).forEach(mergedNames::add);
+		}
+		mergedNames.addAll(parseSkillJson(primarySkills));
+		mergedNames.addAll(parseSkillJson(secondarySkills));
+
+		if (!mergedNames.isEmpty()) {
+			dto.setSkillNames(new ArrayList<>(mergedNames));
+		}
+	}
+
+	private List<String> parseSkillJson(String json) {
+		if (json == null || json.isBlank()) {
+			return List.of();
+		}
+		try {
+			List<String> parsed = OM.readValue(json, new TypeReference<List<String>>() {
+			});
+			return parsed.stream().filter(s -> s != null && !s.isBlank()).map(String::trim).toList();
+		} catch (Exception e) {
+			return List.of();
+		}
 	}
 }

@@ -44,6 +44,8 @@ public class CandidateDto {
 
 	private List<Long> skillIds;
 	private List<String> skillNames;
+	private List<String> primarySkills;
+	private List<String> secondarySkills;
 
 	private Long resumeDocumentId;
 	private String resumeUrl;
@@ -65,5 +67,6 @@ public class CandidateDto {
     private Double expectedCtc;
     private String noticePeriod;
     private String preferredLocation;
+    private String personalEmailId;
     private String comments;
 }

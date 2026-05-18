@@ -166,7 +166,7 @@ public class CandidateServiceImpl implements CandidateService {
 		}
 	}
 
-@Override
+	@Override
 	@Transactional
 	public ResumeShareDto shareResume(ResumeShareDto request) throws Exception {
 
@@ -329,7 +329,8 @@ public class CandidateServiceImpl implements CandidateService {
 						&& h.get("groupId") instanceof Number && ((Number) h.get("groupId")).longValue() == groupId);
 
 				if (alreadyShared) {
-					throw new IllegalArgumentException("Resume has already been shared for Request Group ID: " + groupId);
+					throw new IllegalArgumentException(
+							"Resume has already been shared for Request Group ID: " + groupId);
 				}
 
 				ResourceRequestGroup group = resReqGroupRepo.findById(groupId)
@@ -343,8 +344,9 @@ public class CandidateServiceImpl implements CandidateService {
 							"Project " + project.getProjectId() + " is not linked to an Account.");
 				}
 
-				Account account = accountRepo.findById(project.getAccountId()).orElseThrow(() -> new IllegalArgumentException(
-						"Client Account not found for project: " + project.getProjectId()));
+				Account account = accountRepo.findById(project.getAccountId())
+						.orElseThrow(() -> new IllegalArgumentException(
+								"Client Account not found for project: " + project.getProjectId()));
 
 				Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
 						() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
@@ -407,6 +409,7 @@ public class CandidateServiceImpl implements CandidateService {
 		validateUniqueEmail(dto.getCompanyId(), dto.getEmail());
 
 		Candidate entity = toEntity(dto);
+		sanitizeCandidateForDb(entity);
 		entity.setCandidateId(null);
 		entity.setCreatedDt(null);
 		entity.setUpdatedDt(null);
@@ -469,23 +472,27 @@ public class CandidateServiceImpl implements CandidateService {
 			existing.setSourceType(dto.getSourceType());
 		if (dto.getSourceName() != null)
 			existing.setSourceName(dto.getSourceName());
-		if (dto.getCurrentCompany() != null) 
-	        existing.setCurrentCompany(dto.getCurrentCompany());
-	    
-	    if (dto.getCurrentCtc() != null) 
-	        existing.setCurrentCtc(dto.getCurrentCtc());
-	    
-	    if (dto.getExpectedCtc() != null) 
-	        existing.setExpectedCtc(dto.getExpectedCtc());
-	    
-	    if (dto.getNoticePeriod() != null) 
-	        existing.setNoticePeriod(dto.getNoticePeriod());
-	    
-	    if (dto.getPreferredLocation() != null) 
-	        existing.setPreferredLocation(dto.getPreferredLocation());
-	    
-	    if (dto.getComments() != null) 
-	        existing.setComments(dto.getComments());
+		if (dto.getCurrentCompany() != null)
+			existing.setCurrentCompany(dto.getCurrentCompany());
+
+		if (dto.getCurrentCtc() != null)
+			existing.setCurrentCtc(dto.getCurrentCtc());
+
+		if (dto.getExpectedCtc() != null)
+			existing.setExpectedCtc(dto.getExpectedCtc());
+
+		if (dto.getNoticePeriod() != null)
+			existing.setNoticePeriod(dto.getNoticePeriod());
+
+		if (dto.getPreferredLocation() != null)
+			existing.setPreferredLocation(dto.getPreferredLocation());
+
+		if (dto.getPersonalEmailId() != null)
+			existing.setPersonalEmailId(dto.getPersonalEmailId());
+
+		if (dto.getComments() != null)
+			existing.setComments(dto.getComments());
+		sanitizeCandidateForDb(existing);
 		existing.setUpdatedDt(OffsetDateTime.now());
 
 		Candidate saved = candidateRepo.save(existing);
@@ -905,15 +912,18 @@ public class CandidateServiceImpl implements CandidateService {
 		dto.setSourceName(c.getSourceName());
 		dto.setSkillIds(skillIds);
 		dto.setSkillNames(skills);
+		dto.setPrimarySkills(skills == null ? List.of() : skills);
+		dto.setSecondarySkills(List.of());
 		dto.setCreatedAt(c.getCreatedDt());
 		dto.setUpdatedAt(c.getUpdatedDt());
-		
+
 		dto.setCurrentCompany(c.getCurrentCompany());
-	    dto.setCurrentCtc(c.getCurrentCtc());
-	    dto.setExpectedCtc(c.getExpectedCtc());
-	    dto.setNoticePeriod(c.getNoticePeriod());
-	    dto.setPreferredLocation(c.getPreferredLocation());
-	    dto.setComments(c.getComments());
+		dto.setCurrentCtc(c.getCurrentCtc());
+		dto.setExpectedCtc(c.getExpectedCtc());
+		dto.setNoticePeriod(c.getNoticePeriod());
+		dto.setPreferredLocation(c.getPreferredLocation());
+		dto.setPersonalEmailId(c.getPersonalEmailId());
+		dto.setComments(c.getComments());
 		return dto;
 	}
 
@@ -938,12 +948,43 @@ public class CandidateServiceImpl implements CandidateService {
 		c.setSourceType(dto.getSourceType());
 		c.setSourceName(dto.getSourceName());
 		c.setCurrentCompany(dto.getCurrentCompany());
-        c.setCurrentCtc(dto.getCurrentCtc());
-        c.setExpectedCtc(dto.getExpectedCtc());
-        c.setNoticePeriod(dto.getNoticePeriod());
-        c.setPreferredLocation(dto.getPreferredLocation());
-        c.setComments(dto.getComments());
+		c.setCurrentCtc(dto.getCurrentCtc());
+		c.setExpectedCtc(dto.getExpectedCtc());
+		c.setNoticePeriod(dto.getNoticePeriod());
+		c.setPreferredLocation(dto.getPreferredLocation());
+		c.setPersonalEmailId(dto.getPersonalEmailId());
+		c.setComments(dto.getComments());
 		return c;
+	}
+
+	private void sanitizeCandidateForDb(Candidate c) {
+		c.setFirstName(trimTo(c.getFirstName(), 255));
+		c.setLastName(trimTo(c.getLastName(), 100));
+		c.setEmail(trimTo(c.getEmail(), 255));
+		c.setPhoneNumber(trimTo(c.getPhoneNumber(), 13));
+		c.setLocation(trimTo(c.getLocation(), 255));
+		c.setStatus(trimTo(c.getStatus(), 50));
+		c.setGender(trimTo(c.getGender(), 20));
+		c.setDegrees(trimTo(c.getDegrees(), 255));
+		c.setSpecialization(trimTo(c.getSpecialization(), 255));
+		c.setProfileSummary(trimTo(c.getProfileSummary(), 255));
+		c.setTrainingSummary(trimTo(c.getTrainingSummary(), 255));
+		c.setCertificationSummary(trimTo(c.getCertificationSummary(), 255));
+		c.setSourceType(trimTo(c.getSourceType(), 255));
+		c.setSourceName(trimTo(c.getSourceName(), 255));
+		c.setCurrentCompany(trimTo(c.getCurrentCompany(), 255));
+		c.setNoticePeriod(trimTo(c.getNoticePeriod(), 255));
+		c.setPreferredLocation(trimTo(c.getPreferredLocation(), 255));
+		c.setPersonalEmailId(trimTo(c.getPersonalEmailId(), 255));
+	}
+
+	private String trimTo(String value, int maxLen) {
+		if (value == null)
+			return null;
+		String v = value.trim();
+		if (v.length() <= maxLen)
+			return v;
+		return v.substring(0, maxLen);
 	}
 
 	private void validateResume(MultipartFile f) {
@@ -990,34 +1031,61 @@ public class CandidateServiceImpl implements CandidateService {
 		} else if (isDoc || isDocx) {
 			IConverter converter = null;
 			try (InputStream in = resume.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+				try {
+					converter = LocalConverter.builder().build();
+					DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
 
-				converter = LocalConverter.builder().build();
-				DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
+					boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000)
+							.schedule().get();
+					if (!ok) {
+						throw new IllegalStateException("Resume conversion to PDF failed");
+					}
 
-				boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000)
-						.schedule().get();
-				if (!ok) {
-					throw new IllegalStateException("Resume conversion to PDF failed");
+					byte[] pdfBytes = out.toByteArray();
+					String pdfName = replaceExt(origName, ".pdf");
+					var storedPdf = storage.uploadBytes(candidate.getCandidateId(), pdfName, "application/pdf",
+							pdfBytes);
+
+					CandidateDocument doc = new CandidateDocument();
+					doc.setCandidateId(candidate.getCandidateId());
+					doc.setDocumentName(storedPdf.fileName());
+					doc.setFilePath(storedPdf.url());
+					doc.setDocumentType("resume");
+					doc.setMimeType("application/pdf");
+					doc.setSizeBytes(storedPdf.sizeBytes());
+					doc.setStorageProvider(storedPdf.storageProvider());
+					doc.setStorageKey(storedPdf.key());
+					doc.setIsPrimary(true);
+					doc.setVersion(version);
+					doc.setResumeShareMeta(null);
+					doc.setResumeShareStatus(null);
+					candidateDocumentRepo.save(doc);
+				} catch (Exception ex) {
+					log.warn(
+							"DOC/DOCX to PDF conversion failed for candidate {}. Storing original resume instead. Cause: {}",
+							candidate.getCandidateId(), ex.getMessage());
+					String fallbackMime = (contentType == null || contentType.isBlank())
+							? (isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+									: "application/msword")
+							: contentType;
+					var storedOriginal = storage.upload(candidate.getCandidateId(), origName, fallbackMime,
+							resume.getInputStream(), resume.getSize());
+
+					CandidateDocument doc = new CandidateDocument();
+					doc.setCandidateId(candidate.getCandidateId());
+					doc.setDocumentName(storedOriginal.fileName());
+					doc.setFilePath(storedOriginal.url());
+					doc.setDocumentType("resume");
+					doc.setMimeType(fallbackMime);
+					doc.setSizeBytes(storedOriginal.sizeBytes());
+					doc.setStorageProvider(storedOriginal.storageProvider());
+					doc.setStorageKey(storedOriginal.key());
+					doc.setIsPrimary(true);
+					doc.setVersion(version);
+					doc.setResumeShareMeta(null);
+					doc.setResumeShareStatus(null);
+					candidateDocumentRepo.save(doc);
 				}
-
-				byte[] pdfBytes = out.toByteArray();
-				String pdfName = replaceExt(origName, ".pdf");
-				var storedPdf = storage.uploadBytes(candidate.getCandidateId(), pdfName, "application/pdf", pdfBytes);
-
-				CandidateDocument doc = new CandidateDocument();
-				doc.setCandidateId(candidate.getCandidateId());
-				doc.setDocumentName(storedPdf.fileName());
-				doc.setFilePath(storedPdf.url());
-				doc.setDocumentType("resume");
-				doc.setMimeType("application/pdf");
-				doc.setSizeBytes(storedPdf.sizeBytes());
-				doc.setStorageProvider(storedPdf.storageProvider());
-				doc.setStorageKey(storedPdf.key());
-				doc.setIsPrimary(true);
-				doc.setVersion(version);
-				doc.setResumeShareMeta(null);
-				doc.setResumeShareStatus(null);
-				candidateDocumentRepo.save(doc);
 			} finally {
 				if (converter != null) {
 					try {

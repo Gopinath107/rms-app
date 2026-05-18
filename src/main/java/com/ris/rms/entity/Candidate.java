@@ -86,6 +86,9 @@ public class Candidate {
     @Column(name = "preferred_location")
     private String preferredLocation;
 
+    @Column(name = "personal_email_id", length = 255)
+    private String personalEmailId;
+
     @Column(name = "comments", columnDefinition = "TEXT")
     private String comments;
     

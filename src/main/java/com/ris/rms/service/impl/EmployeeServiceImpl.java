@@ -132,6 +132,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 	public EmployeeDto create(EmployeeDto dto, MultipartFile resume) throws IOException, Exception {
 		validateCompanyAndDepartmentForCreate(dto);
 		validateUniqueEmail(dto.getCompanyId(), dto.getEmail());
+		validateUniquePersonalEmail(dto.getCompanyId(), dto.getPersonalEmailId());
 
 		Employee entity = toEntity(dto);
 		entity.setEmployeeId(null);
@@ -390,65 +391,121 @@ public class EmployeeServiceImpl implements EmployeeService {
 			existing.setDepartmentId(dto.getDepartmentId());
 		}
 
-		if (dto.getFirstName() != null)      existing.setFirstName(dto.getFirstName());
-		if (dto.getMiddleName() != null)     existing.setMiddleName(dto.getMiddleName());
-		if (dto.getLastName() != null)       existing.setLastName(dto.getLastName());
-		if (dto.getPhoneNumber() != null)    existing.setPhoneNumber(dto.getPhoneNumber());
-		if (dto.getPrimaryCountryCode() != null)  existing.setPrimaryCountryCode(dto.getPrimaryCountryCode());
-		if (dto.getPrimaryContactNo() != null)    existing.setPrimaryContactNo(dto.getPrimaryContactNo());
-		if (dto.getSecondaryCountryCode() != null) existing.setSecondaryCountryCode(dto.getSecondaryCountryCode());
-		if (dto.getSecondaryContactNo() != null)  existing.setSecondaryContactNo(dto.getSecondaryContactNo());
-		if (dto.getExperienceYears() != null) existing.setExperienceYears(dto.getExperienceYears());
-		if (dto.getLocation() != null)       existing.setLocation(dto.getLocation());
-		if (dto.getJoiningDate() != null)    existing.setJoiningDate(dto.getJoiningDate());
-		if (dto.getEmploymentType() != null) existing.setEmploymentType(dto.getEmploymentType());
-		if (dto.getStatus() != null)         existing.setStatus(dto.getStatus());
-		if (dto.getJobTitle() != null)       existing.setJobTitle(dto.getJobTitle());
-		if (dto.getGender() != null)         existing.setGender(dto.getGender());
+		if (dto.getFirstName() != null)
+			existing.setFirstName(dto.getFirstName());
+		if (dto.getMiddleName() != null)
+			existing.setMiddleName(dto.getMiddleName());
+		if (dto.getLastName() != null)
+			existing.setLastName(dto.getLastName());
+		if (dto.getPhoneNumber() != null)
+			existing.setPhoneNumber(dto.getPhoneNumber());
+		if (dto.getPrimaryCountryCode() != null)
+			existing.setPrimaryCountryCode(dto.getPrimaryCountryCode());
+		if (dto.getPrimaryContactNo() != null)
+			existing.setPrimaryContactNo(dto.getPrimaryContactNo());
+		if (dto.getSecondaryCountryCode() != null)
+			existing.setSecondaryCountryCode(dto.getSecondaryCountryCode());
+		if (dto.getSecondaryContactNo() != null)
+			existing.setSecondaryContactNo(dto.getSecondaryContactNo());
+		if (dto.getExperienceYears() != null)
+			existing.setExperienceYears(dto.getExperienceYears());
+		if (dto.getLocation() != null)
+			existing.setLocation(dto.getLocation());
+		if (dto.getJoiningDate() != null)
+			existing.setJoiningDate(dto.getJoiningDate());
+		if (dto.getEmploymentType() != null)
+			existing.setEmploymentType(dto.getEmploymentType());
+		if (dto.getStatus() != null)
+			existing.setStatus(dto.getStatus());
+		if (dto.getJobTitle() != null)
+			existing.setJobTitle(dto.getJobTitle());
+		if (dto.getGender() != null)
+			existing.setGender(dto.getGender());
+		if (dto.getPersonalEmailId() != null && !dto.getPersonalEmailId().trim().isEmpty()
+				&& !dto.getPersonalEmailId().equalsIgnoreCase(existing.getPersonalemailid())) {
+			validateUniquePersonalEmail(existing.getCompanyId(), dto.getPersonalEmailId(), id);
+			existing.setPersonalemailid(dto.getPersonalEmailId());
+		}
 		// Identity
-		if (dto.getDateOfBirth() != null)            existing.setDateOfBirth(dto.getDateOfBirth());
-		if (dto.getCountryOfCitizenship() != null)   existing.setCountryOfCitizenship(dto.getCountryOfCitizenship());
-		if (dto.getDocumentType() != null)           existing.setDocumentType(dto.getDocumentType());
-		if (dto.getDocumentNumber() != null)         existing.setDocumentNumber(dto.getDocumentNumber());
-		if (dto.getSecurityClearance() != null)      existing.setSecurityClearance(dto.getSecurityClearance());
-		if (dto.getVisa() != null)                   existing.setVisa(dto.getVisa());
-		if (dto.getVisaType() != null)               existing.setVisaType(dto.getVisaType());
+		if (dto.getDateOfBirth() != null)
+			existing.setDateOfBirth(dto.getDateOfBirth());
+		if (dto.getCountryOfCitizenship() != null)
+			existing.setCountryOfCitizenship(dto.getCountryOfCitizenship());
+		if (dto.getDocumentType() != null)
+			existing.setDocumentType(dto.getDocumentType());
+		if (dto.getDocumentNumber() != null)
+			existing.setDocumentNumber(dto.getDocumentNumber());
+		if (dto.getSecurityClearance() != null)
+			existing.setSecurityClearance(dto.getSecurityClearance());
+		if (dto.getVisa() != null)
+			existing.setVisa(dto.getVisa());
+		if (dto.getVisaType() != null)
+			existing.setVisaType(dto.getVisaType());
 		// Address
-		if (dto.getCountry() != null)          existing.setCountry(dto.getCountry());
-		if (dto.getState() != null)            existing.setState(dto.getState());
-		if (dto.getCity() != null)             existing.setCity(dto.getCity());
-		if (dto.getZipCode() != null)          existing.setZipCode(dto.getZipCode());
-		if (dto.getStreet() != null)           existing.setStreet(dto.getStreet());
-		if (dto.getAvailabilityToJoin() != null)    existing.setAvailabilityToJoin(dto.getAvailabilityToJoin());
-		if (dto.getInterviewAvailability() != null) existing.setInterviewAvailability(dto.getInterviewAvailability());
+		if (dto.getCountry() != null)
+			existing.setCountry(dto.getCountry());
+		if (dto.getState() != null)
+			existing.setState(dto.getState());
+		if (dto.getCity() != null)
+			existing.setCity(dto.getCity());
+		if (dto.getZipCode() != null)
+			existing.setZipCode(dto.getZipCode());
+		if (dto.getStreet() != null)
+			existing.setStreet(dto.getStreet());
+		if (dto.getAvailabilityToJoin() != null)
+			existing.setAvailabilityToJoin(dto.getAvailabilityToJoin());
+		if (dto.getInterviewAvailability() != null)
+			existing.setInterviewAvailability(dto.getInterviewAvailability());
 		// Education
-		if (dto.getDegrees() != null)              existing.setDegrees(dto.getDegrees());
-		if (dto.getSpecialization() != null)       existing.setSpecialization(dto.getSpecialization());
-		if (dto.getYearOfPassing() != null)        existing.setYearofpassing(dto.getYearOfPassing());
-		if (dto.getHighestQualification() != null) existing.setHighestQualification(dto.getHighestQualification());
-		if (dto.getUniversityName() != null)       existing.setUniversityName(dto.getUniversityName());
-		if (dto.getDateOfQualification() != null)  existing.setDateOfQualification(dto.getDateOfQualification());
-		if (dto.getUsaDegree() != null)            existing.setUsaDegree(dto.getUsaDegree());
+		if (dto.getDegrees() != null)
+			existing.setDegrees(dto.getDegrees());
+		if (dto.getSpecialization() != null)
+			existing.setSpecialization(dto.getSpecialization());
+		if (dto.getYearOfPassing() != null)
+			existing.setYearofpassing(dto.getYearOfPassing());
+		if (dto.getHighestQualification() != null)
+			existing.setHighestQualification(dto.getHighestQualification());
+		if (dto.getUniversityName() != null)
+			existing.setUniversityName(dto.getUniversityName());
+		if (dto.getDateOfQualification() != null)
+			existing.setDateOfQualification(dto.getDateOfQualification());
+		if (dto.getUsaDegree() != null)
+			existing.setUsaDegree(dto.getUsaDegree());
 		// Work
-		if (dto.getCurrentJobTitle() != null)   existing.setCurrentJobTitle(dto.getCurrentJobTitle());
-		if (dto.getMostRecentEmployer() != null) existing.setMostRecentEmployer(dto.getMostRecentEmployer());
-		if (dto.getTotalExperience() != null)   existing.setTotalExperience(dto.getTotalExperience());
-		if (dto.getRelocate() != null)          existing.setRelocate(dto.getRelocate());
+		if (dto.getCurrentJobTitle() != null)
+			existing.setCurrentJobTitle(dto.getCurrentJobTitle());
+		if (dto.getMostRecentEmployer() != null)
+			existing.setMostRecentEmployer(dto.getMostRecentEmployer());
+		if (dto.getTotalExperience() != null)
+			existing.setTotalExperience(dto.getTotalExperience());
+		if (dto.getRelocate() != null)
+			existing.setRelocate(dto.getRelocate());
 		// Compensation
-		if (dto.getCurrency() != null)          existing.setCurrency(dto.getCurrency());
-		if (dto.getFrequency() != null)         existing.setFrequency(dto.getFrequency());
-		if (dto.getSourcingRate() != null)      existing.setSourcingRate(dto.getSourcingRate());
+		if (dto.getCurrency() != null)
+			existing.setCurrency(dto.getCurrency());
+		if (dto.getFrequency() != null)
+			existing.setFrequency(dto.getFrequency());
+		if (dto.getSourcingRate() != null)
+			existing.setSourcingRate(dto.getSourcingRate());
 		// Summaries
-		if (dto.getProfileSummary() != null)        existing.setProfilesummary(dto.getProfileSummary());
-		if (dto.getTrainingSummary() != null)       existing.setTrainingsummary(dto.getTrainingSummary());
-		if (dto.getCertificationSummary() != null)  existing.setCertificationsummary(dto.getCertificationSummary());
-		if (dto.getResumeSummary() != null)         existing.setResumeSummary(dto.getResumeSummary());
+		if (dto.getProfileSummary() != null)
+			existing.setProfilesummary(dto.getProfileSummary());
+		if (dto.getTrainingSummary() != null)
+			existing.setTrainingsummary(dto.getTrainingSummary());
+		if (dto.getCertificationSummary() != null)
+			existing.setCertificationsummary(dto.getCertificationSummary());
+		if (dto.getResumeSummary() != null)
+			existing.setResumeSummary(dto.getResumeSummary());
 		// Skills
-		if (dto.getPrimarySkills() != null)    existing.setPrimarySkillsJson(listToJson(dto.getPrimarySkills()));
-		if (dto.getSecondarySkills() != null)  existing.setSecondarySkillsJson(listToJson(dto.getSecondarySkills()));
-		if (dto.getSuggestedKeywords() != null) existing.setSuggestedKeywords(dto.getSuggestedKeywords());
+		if (dto.getPrimarySkills() != null)
+			existing.setPrimarySkillsJson(listToJson(dto.getPrimarySkills()));
+		if (dto.getSecondarySkills() != null)
+			existing.setSecondarySkillsJson(listToJson(dto.getSecondarySkills()));
+		if (dto.getSuggestedKeywords() != null)
+			existing.setSuggestedKeywords(dto.getSuggestedKeywords());
 		// Social links
-		if (dto.getSocialLinks() != null)      existing.setSocialLinksJson(mapListToJson(dto.getSocialLinks()));
+		if (dto.getSocialLinks() != null)
+			existing.setSocialLinksJson(mapListToJson(dto.getSocialLinks()));
 
 		existing.setUpdateddt(OffsetDateTime.now());
 		Employee saved = repo.save(existing);
@@ -781,7 +838,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 		meta.put("actionByUserId", request.getActionByUserId());
 		meta.put("actionByUserName", request.getActionByUserName());
 		meta.put("actionAt", request.getActionAt() != null ? request.getActionAt().toString() : null);
-		meta.put("sharedWith", history); 
+		meta.put("sharedWith", history);
 		String metaJson = OM.writeValueAsString(meta);
 
 		em.createNativeQuery("update rms.employee_document " + "   set resume_share_status = :status, "
@@ -807,6 +864,25 @@ public class EmployeeServiceImpl implements EmployeeService {
 	private void validateUniqueEmail(Long companyId, String email) {
 		if (email != null && repo.existsByCompanyIdAndEmailIgnoreCase(companyId, email))
 			throw new IllegalArgumentException("Email already exists for this company");
+	}
+
+	private void validateUniquePersonalEmail(Long companyId, String personalEmailId) {
+		validateUniquePersonalEmail(companyId, personalEmailId, null);
+	}
+
+	private void validateUniquePersonalEmail(Long companyId, String personalEmailId, Long excludeId) {
+		if (personalEmailId != null && !personalEmailId.isBlank()) {
+			boolean exists;
+			if (excludeId != null) {
+				exists = repo.existsByCompanyIdAndPersonalemailidIgnoreCaseAndEmployeeIdNot(companyId, personalEmailId,
+						excludeId);
+			} else {
+				exists = repo.existsByCompanyIdAndPersonalemailidIgnoreCase(companyId, personalEmailId);
+			}
+			if (exists) {
+				throw new IllegalArgumentException("Personal email already exists for this company");
+			}
+		}
 	}
 
 	private void handleSkills(Long employeeId, EmployeeDto dto) {
@@ -916,33 +992,60 @@ public class EmployeeServiceImpl implements EmployeeService {
 		} else if (isDoc || isDocx) {
 			IConverter converter = null;
 			try (InputStream in = resume.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+				try {
+					converter = LocalConverter.builder().build();
+					DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
 
-				converter = LocalConverter.builder().build();
-				DocumentType inType = isDocx ? DocumentType.DOCX : DocumentType.DOC;
+					boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000)
+							.schedule().get();
+					if (!ok)
+						throw new IllegalStateException("Resume conversion to PDF failed");
 
-				boolean ok = converter.convert(in).as(inType).to(out).as(DocumentType.PDF).prioritizeWith(1000)
-						.schedule().get();
-				if (!ok)
-					throw new IllegalStateException("Resume conversion to PDF failed");
+					byte[] pdfBytes = out.toByteArray();
+					String pdfName = replaceExt(origName, ".pdf");
+					var storedPdf = storage.uploadBytes(saved.getEmployeeId(), pdfName, "application/pdf", pdfBytes);
 
-				byte[] pdfBytes = out.toByteArray();
-				String pdfName = replaceExt(origName, ".pdf");
-				var storedPdf = storage.uploadBytes(saved.getEmployeeId(), pdfName, "application/pdf", pdfBytes);
+					EmployeeDocument doc = new EmployeeDocument();
+					doc.setEmployeeId(saved.getEmployeeId());
+					doc.setDocumentName(storedPdf.fileName());
+					doc.setFilePath(storedPdf.url());
+					doc.setDocumentType("resume");
+					doc.setMimeType("application/pdf");
+					doc.setSizeBytes(storedPdf.sizeBytes());
+					doc.setStorageProvider(storedPdf.storageProvider());
+					doc.setStorageKey(storedPdf.key());
+					doc.setIsPrimary(true);
+					doc.setVersion(version);
+					doc.setResumeShareMeta(null);
+					doc.setResumeShareStatus(null);
+					employeeDocumentRepo.save(doc);
+				} catch (Exception ex) {
+					log.warn(
+							"DOC/DOCX to PDF conversion failed for employee {}. Storing original resume instead. Cause: {}",
+							saved.getEmployeeId(), ex.getMessage());
+					String fallbackMime = (contentType == null || contentType.isBlank())
+							? (isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+									: "application/msword")
+							: contentType;
+					var storedOriginal = storage.upload(saved.getEmployeeId(), origName, fallbackMime,
+							resume.getInputStream(),
+							resume.getSize());
 
-				EmployeeDocument doc = new EmployeeDocument();
-				doc.setEmployeeId(saved.getEmployeeId());
-				doc.setDocumentName(storedPdf.fileName());
-				doc.setFilePath(storedPdf.url());
-				doc.setDocumentType("resume");
-				doc.setMimeType("application/pdf");
-				doc.setSizeBytes(storedPdf.sizeBytes());
-				doc.setStorageProvider(storedPdf.storageProvider());
-				doc.setStorageKey(storedPdf.key());
-				doc.setIsPrimary(true);
-				doc.setVersion(version);
-				doc.setResumeShareMeta(null);
-				doc.setResumeShareStatus(null);
-				employeeDocumentRepo.save(doc);
+					EmployeeDocument doc = new EmployeeDocument();
+					doc.setEmployeeId(saved.getEmployeeId());
+					doc.setDocumentName(storedOriginal.fileName());
+					doc.setFilePath(storedOriginal.url());
+					doc.setDocumentType("resume");
+					doc.setMimeType(fallbackMime);
+					doc.setSizeBytes(storedOriginal.sizeBytes());
+					doc.setStorageProvider(storedOriginal.storageProvider());
+					doc.setStorageKey(storedOriginal.key());
+					doc.setIsPrimary(true);
+					doc.setVersion(version);
+					doc.setResumeShareMeta(null);
+					doc.setResumeShareStatus(null);
+					employeeDocumentRepo.save(doc);
+				}
 			} finally {
 				if (converter != null) {
 					try {
@@ -1230,24 +1333,44 @@ public class EmployeeServiceImpl implements EmployeeService {
 
 	@SuppressWarnings("unchecked")
 	private List<String> jsonToList(String json) {
-		if (json == null || json.isBlank()) return null;
-		try { return OM.readValue(json, List.class); } catch (Exception ex) { return null; }
+		if (json == null || json.isBlank())
+			return null;
+		try {
+			return OM.readValue(json, List.class);
+		} catch (Exception ex) {
+			return null;
+		}
 	}
 
 	@SuppressWarnings("unchecked")
 	private List<Map<String, String>> jsonToMapList(String json) {
-		if (json == null || json.isBlank()) return null;
-		try { return OM.readValue(json, List.class); } catch (Exception ex) { return null; }
+		if (json == null || json.isBlank())
+			return null;
+		try {
+			return OM.readValue(json, List.class);
+		} catch (Exception ex) {
+			return null;
+		}
 	}
 
 	private String listToJson(List<?> list) {
-		if (list == null || list.isEmpty()) return null;
-		try { return OM.writeValueAsString(list); } catch (Exception ex) { return null; }
+		if (list == null || list.isEmpty())
+			return null;
+		try {
+			return OM.writeValueAsString(list);
+		} catch (Exception ex) {
+			return null;
+		}
 	}
 
 	private String mapListToJson(List<Map<String, String>> list) {
-		if (list == null || list.isEmpty()) return null;
-		try { return OM.writeValueAsString(list); } catch (Exception ex) { return null; }
+		if (list == null || list.isEmpty())
+			return null;
+		try {
+			return OM.writeValueAsString(list);
+		} catch (Exception ex) {
+			return null;
+		}
 	}
 
 	private List<EmployeeDto> parseCsv(Long companyId, InputStream inputStream, ImportResultDto result)

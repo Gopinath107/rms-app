@@ -501,6 +501,43 @@ public class CandidateServiceImpl implements CandidateService {
 
 		if (dto.getComments() != null)
 			existing.setComments(dto.getComments());
+
+		// New fields
+		if (dto.getMiddleName() != null) existing.setMiddleName(dto.getMiddleName());
+		if (dto.getDateOfBirth() != null) existing.setDateOfBirth(dto.getDateOfBirth());
+		if (dto.getPrimaryCountryCode() != null) existing.setPrimaryCountryCode(dto.getPrimaryCountryCode());
+		if (dto.getPrimaryContactNo() != null) existing.setPrimaryContactNo(dto.getPrimaryContactNo());
+		if (dto.getSecondaryCountryCode() != null) existing.setSecondaryCountryCode(dto.getSecondaryCountryCode());
+		if (dto.getSecondaryContactNo() != null) existing.setSecondaryContactNo(dto.getSecondaryContactNo());
+		if (dto.getCountryOfCitizenship() != null) existing.setCountryOfCitizenship(dto.getCountryOfCitizenship());
+		if (dto.getDocumentType() != null) existing.setDocumentType(dto.getDocumentType());
+		if (dto.getDocumentNumber() != null) existing.setDocumentNumber(dto.getDocumentNumber());
+		if (dto.getSecurityClearance() != null) existing.setSecurityClearance(dto.getSecurityClearance());
+		if (dto.getVisa() != null) existing.setVisa(dto.getVisa());
+		if (dto.getVisaType() != null) existing.setVisaType(dto.getVisaType());
+		if (dto.getCountry() != null) existing.setCountry(dto.getCountry());
+		if (dto.getState() != null) existing.setState(dto.getState());
+		if (dto.getCity() != null) existing.setCity(dto.getCity());
+		if (dto.getZipCode() != null) existing.setZipCode(dto.getZipCode());
+		if (dto.getStreet() != null) existing.setStreet(dto.getStreet());
+		if (dto.getAvailabilityToJoin() != null) existing.setAvailabilityToJoin(dto.getAvailabilityToJoin());
+		if (dto.getInterviewAvailability() != null) existing.setInterviewAvailability(dto.getInterviewAvailability());
+		if (dto.getHighestQualification() != null) existing.setHighestQualification(dto.getHighestQualification());
+		if (dto.getUniversityName() != null) existing.setUniversityName(dto.getUniversityName());
+		if (dto.getDateOfQualification() != null) existing.setDateOfQualification(dto.getDateOfQualification());
+		if (dto.getUsaDegree() != null) existing.setUsaDegree(dto.getUsaDegree());
+		if (dto.getCurrentJobTitle() != null) existing.setCurrentJobTitle(dto.getCurrentJobTitle());
+		if (dto.getMostRecentEmployer() != null) existing.setMostRecentEmployer(dto.getMostRecentEmployer());
+		if (dto.getTotalExperience() != null) existing.setTotalExperience(dto.getTotalExperience());
+		if (dto.getRelocate() != null) existing.setRelocate(dto.getRelocate());
+		if (dto.getCurrency() != null) existing.setCurrency(dto.getCurrency());
+		if (dto.getFrequency() != null) existing.setFrequency(dto.getFrequency());
+		if (dto.getSourcingRate() != null) existing.setSourcingRate(dto.getSourcingRate());
+		if (dto.getResumeSummary() != null) existing.setResumeSummary(dto.getResumeSummary());
+		if (dto.getSuggestedKeywords() != null) existing.setSuggestedKeywords(dto.getSuggestedKeywords());
+		if (dto.getSocialLinks() != null) existing.setSocialLinksJson(dto.getSocialLinks());
+		if (dto.getCurrentAccountId() != null) existing.setCurrentAccountId(dto.getCurrentAccountId());
+
 		sanitizeCandidateForDb(existing);
 		existing.setUpdatedDt(OffsetDateTime.now());
 
@@ -933,6 +970,41 @@ public class CandidateServiceImpl implements CandidateService {
 		dto.setPreferredLocation(c.getPreferredLocation());
 		dto.setPersonalEmailId(c.getPersonalEmailId());
 		dto.setComments(c.getComments());
+		
+		dto.setMiddleName(c.getMiddleName());
+		dto.setDateOfBirth(c.getDateOfBirth());
+		dto.setPrimaryCountryCode(c.getPrimaryCountryCode());
+		dto.setPrimaryContactNo(c.getPrimaryContactNo());
+		dto.setSecondaryCountryCode(c.getSecondaryCountryCode());
+		dto.setSecondaryContactNo(c.getSecondaryContactNo());
+		dto.setCountryOfCitizenship(c.getCountryOfCitizenship());
+		dto.setDocumentType(c.getDocumentType());
+		dto.setDocumentNumber(c.getDocumentNumber());
+		dto.setSecurityClearance(c.getSecurityClearance());
+		dto.setVisa(c.getVisa());
+		dto.setVisaType(c.getVisaType());
+		dto.setCountry(c.getCountry());
+		dto.setState(c.getState());
+		dto.setCity(c.getCity());
+		dto.setZipCode(c.getZipCode());
+		dto.setStreet(c.getStreet());
+		dto.setAvailabilityToJoin(c.getAvailabilityToJoin());
+		dto.setInterviewAvailability(c.getInterviewAvailability());
+		dto.setHighestQualification(c.getHighestQualification());
+		dto.setUniversityName(c.getUniversityName());
+		dto.setDateOfQualification(c.getDateOfQualification());
+		dto.setUsaDegree(c.getUsaDegree());
+		dto.setCurrentJobTitle(c.getCurrentJobTitle());
+		dto.setMostRecentEmployer(c.getMostRecentEmployer());
+		dto.setTotalExperience(c.getTotalExperience());
+		dto.setRelocate(c.getRelocate());
+		dto.setCurrency(c.getCurrency());
+		dto.setFrequency(c.getFrequency());
+		dto.setSourcingRate(c.getSourcingRate());
+		dto.setResumeSummary(c.getResumeSummary());
+		dto.setSuggestedKeywords(c.getSuggestedKeywords());
+		dto.setSocialLinks(c.getSocialLinksJson());
+		dto.setCurrentAccountId(c.getCurrentAccountId());
 		return dto;
 	}
 
@@ -963,6 +1035,41 @@ public class CandidateServiceImpl implements CandidateService {
 		c.setPreferredLocation(dto.getPreferredLocation());
 		c.setPersonalEmailId((dto.getPersonalEmailId() != null && dto.getPersonalEmailId().isBlank()) ? null : dto.getPersonalEmailId());
 		c.setComments(dto.getComments());
+		
+		c.setMiddleName(dto.getMiddleName());
+		c.setDateOfBirth(dto.getDateOfBirth());
+		c.setPrimaryCountryCode(dto.getPrimaryCountryCode());
+		c.setPrimaryContactNo(dto.getPrimaryContactNo());
+		c.setSecondaryCountryCode(dto.getSecondaryCountryCode());
+		c.setSecondaryContactNo(dto.getSecondaryContactNo());
+		c.setCountryOfCitizenship(dto.getCountryOfCitizenship());
+		c.setDocumentType(dto.getDocumentType());
+		c.setDocumentNumber(dto.getDocumentNumber());
+		c.setSecurityClearance(dto.getSecurityClearance());
+		c.setVisa(dto.getVisa());
+		c.setVisaType(dto.getVisaType());
+		c.setCountry(dto.getCountry());
+		c.setState(dto.getState());
+		c.setCity(dto.getCity());
+		c.setZipCode(dto.getZipCode());
+		c.setStreet(dto.getStreet());
+		c.setAvailabilityToJoin(dto.getAvailabilityToJoin());
+		c.setInterviewAvailability(dto.getInterviewAvailability());
+		c.setHighestQualification(dto.getHighestQualification());
+		c.setUniversityName(dto.getUniversityName());
+		c.setDateOfQualification(dto.getDateOfQualification());
+		c.setUsaDegree(dto.getUsaDegree());
+		c.setCurrentJobTitle(dto.getCurrentJobTitle());
+		c.setMostRecentEmployer(dto.getMostRecentEmployer());
+		c.setTotalExperience(dto.getTotalExperience());
+		c.setRelocate(dto.getRelocate());
+		c.setCurrency(dto.getCurrency());
+		c.setFrequency(dto.getFrequency());
+		c.setSourcingRate(dto.getSourcingRate());
+		c.setResumeSummary(dto.getResumeSummary());
+		c.setSuggestedKeywords(dto.getSuggestedKeywords());
+		c.setSocialLinksJson(dto.getSocialLinks());
+		c.setCurrentAccountId(dto.getCurrentAccountId());
 		return c;
 	}
 
@@ -985,7 +1092,34 @@ public class CandidateServiceImpl implements CandidateService {
 		c.setNoticePeriod(trimTo(c.getNoticePeriod(), 255));
 		c.setPreferredLocation(trimTo(c.getPreferredLocation(), 255));
 		c.setPersonalEmailId(trimTo(c.getPersonalEmailId(), 255));
-	}
+	
+		c.setMiddleName(trimTo(c.getMiddleName(), 100));
+		c.setPrimaryCountryCode(trimTo(c.getPrimaryCountryCode(), 10));
+		c.setPrimaryContactNo(trimTo(c.getPrimaryContactNo(), 20));
+		c.setSecondaryCountryCode(trimTo(c.getSecondaryCountryCode(), 10));
+		c.setSecondaryContactNo(trimTo(c.getSecondaryContactNo(), 20));
+		c.setCountryOfCitizenship(trimTo(c.getCountryOfCitizenship(), 100));
+		c.setDocumentType(trimTo(c.getDocumentType(), 50));
+		c.setDocumentNumber(trimTo(c.getDocumentNumber(), 100));
+		c.setSecurityClearance(trimTo(c.getSecurityClearance(), 100));
+		c.setVisa(trimTo(c.getVisa(), 50));
+		c.setVisaType(trimTo(c.getVisaType(), 50));
+		c.setCountry(trimTo(c.getCountry(), 100));
+		c.setState(trimTo(c.getState(), 100));
+		c.setCity(trimTo(c.getCity(), 100));
+		c.setZipCode(trimTo(c.getZipCode(), 20));
+		c.setStreet(trimTo(c.getStreet(), 255));
+		c.setAvailabilityToJoin(trimTo(c.getAvailabilityToJoin(), 100));
+		c.setInterviewAvailability(trimTo(c.getInterviewAvailability(), 100));
+		c.setHighestQualification(trimTo(c.getHighestQualification(), 255));
+		c.setUniversityName(trimTo(c.getUniversityName(), 255));
+		c.setUsaDegree(trimTo(c.getUsaDegree(), 50));
+		c.setCurrentJobTitle(trimTo(c.getCurrentJobTitle(), 255));
+		c.setMostRecentEmployer(trimTo(c.getMostRecentEmployer(), 255));
+		c.setRelocate(trimTo(c.getRelocate(), 50));
+		c.setCurrency(trimTo(c.getCurrency(), 20));
+		c.setFrequency(trimTo(c.getFrequency(), 50));
+}
 
 	private String trimTo(String value, int maxLen) {
 		if (value == null)

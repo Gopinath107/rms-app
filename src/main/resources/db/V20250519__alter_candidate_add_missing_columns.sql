@@ -3,7 +3,7 @@
 
 ALTER TABLE rms.candidate
   ADD COLUMN IF NOT EXISTS middle_name         VARCHAR(100),
-  ADD COLUMN IF NOT EXISTS date_of_birth       DATE,
+  ADD COLUMN IF NOT EXISTS date_of_birth       VARCHAR(20),
   ADD COLUMN IF NOT EXISTS primary_country_code  VARCHAR(10),
   ADD COLUMN IF NOT EXISTS primary_contact_no    VARCHAR(30),
   ADD COLUMN IF NOT EXISTS secondary_country_code VARCHAR(10),
@@ -23,11 +23,11 @@ ALTER TABLE rms.candidate
   ADD COLUMN IF NOT EXISTS interview_availability VARCHAR(255),
   ADD COLUMN IF NOT EXISTS highest_qualification VARCHAR(255),
   ADD COLUMN IF NOT EXISTS university_name       VARCHAR(255),
-  ADD COLUMN IF NOT EXISTS date_of_qualification DATE,
+  ADD COLUMN IF NOT EXISTS date_of_qualification VARCHAR(20),
   ADD COLUMN IF NOT EXISTS usa_degree            VARCHAR(100),
   ADD COLUMN IF NOT EXISTS current_job_title     VARCHAR(255),
   ADD COLUMN IF NOT EXISTS most_recent_employer  VARCHAR(255),
-  ADD COLUMN IF NOT EXISTS total_experience      INTEGER,
+  ADD COLUMN IF NOT EXISTS total_experience      NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS relocate              VARCHAR(10),
   ADD COLUMN IF NOT EXISTS currency              VARCHAR(20),
   ADD COLUMN IF NOT EXISTS frequency             VARCHAR(30),

@@ -91,6 +91,108 @@ public class Candidate {
 
     @Column(name = "comments", columnDefinition = "TEXT")
     private String comments;
+
+    @Column(name = "middle_name", length = 100)
+    private String middleName;
+
+    @Column(name = "date_of_birth")
+    private String dateOfBirth;
+
+    @Column(name = "primary_country_code", length = 10)
+    private String primaryCountryCode;
+
+    @Column(name = "primary_contact_no", length = 20)
+    private String primaryContactNo;
+
+    @Column(name = "secondary_country_code", length = 10)
+    private String secondaryCountryCode;
+
+    @Column(name = "secondary_contact_no", length = 20)
+    private String secondaryContactNo;
+
+    @Column(name = "country_of_citizenship", length = 100)
+    private String countryOfCitizenship;
+
+    @Column(name = "document_type", length = 50)
+    private String documentType;
+
+    @Column(name = "document_number", length = 100)
+    private String documentNumber;
+
+    @Column(name = "security_clearance", length = 100)
+    private String securityClearance;
+
+    @Column(name = "visa", length = 50)
+    private String visa;
+
+    @Column(name = "visa_type", length = 50)
+    private String visaType;
+
+    @Column(name = "country", length = 100)
+    private String country;
+
+    @Column(name = "state", length = 100)
+    private String state;
+
+    @Column(name = "city", length = 100)
+    private String city;
+
+    @Column(name = "zip_code", length = 20)
+    private String zipCode;
+
+    @Column(name = "street", length = 255)
+    private String street;
+
+    @Column(name = "availability_to_join", length = 100)
+    private String availabilityToJoin;
+
+    @Column(name = "interview_availability", length = 100)
+    private String interviewAvailability;
+
+    @Column(name = "highest_qualification", length = 255)
+    private String highestQualification;
+
+    @Column(name = "university_name", length = 255)
+    private String universityName;
+
+    @Column(name = "date_of_qualification")
+    private String dateOfQualification;
+
+    @Column(name = "usa_degree", length = 50)
+    private String usaDegree;
+
+    @Column(name = "current_job_title", length = 255)
+    private String currentJobTitle;
+
+    @Column(name = "most_recent_employer", length = 255)
+    private String mostRecentEmployer;
+
+    @Column(name = "total_experience")
+    private Double totalExperience;
+
+    @Column(name = "relocate", length = 50)
+    private String relocate;
+
+    @Column(name = "currency", length = 20)
+    private String currency;
+
+    @Column(name = "frequency", length = 50)
+    private String frequency;
+
+    @Column(name = "sourcing_rate")
+    private Double sourcingRate;
+
+    @Column(name = "resume_summary", columnDefinition = "TEXT")
+    private String resumeSummary;
+
+    @Column(name = "suggested_keywords", columnDefinition = "TEXT")
+    private String suggestedKeywords;
+
+    @Column(name = "social_links_json", columnDefinition = "JSON")
+    private String socialLinksJson;
+
+    @Column(name = "current_account_id")
+    private Long currentAccountId;
     
     public String getFullName() {
         return (firstName != null ? firstName : "") + " " + (lastName != null ? lastName : "");

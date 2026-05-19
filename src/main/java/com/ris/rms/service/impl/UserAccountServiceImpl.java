@@ -47,13 +47,14 @@ public class UserAccountServiceImpl implements UserAccountService {
 		UserAccount saved;
 
 		if (existingOpt.isPresent()) {
-			// User already exists — merge new roles in
+			// User already exists — merge new roles AND update email/password
 			UserAccount existing = existingOpt.get();
 
 			if (!Objects.equals(existing.getCompanyId(), dto.getCompanyId())) {
 				throw new IllegalArgumentException("User exists but belongs to a different company");
 			}
 
+			// Merge roles
 			if (existing.getRoleIds() == null) {
 				existing.setRoleIds(new ArrayList<>());
 			}
@@ -61,6 +62,22 @@ public class UserAccountServiceImpl implements UserAccountService {
 				if (!existing.getRoleIds().contains(rId)) {
 					existing.getRoleIds().add(rId);
 				}
+			}
+
+			// Update email if provided — must be employee's work or personal email
+			if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
+				String newEmail = dto.getEmail().trim();
+				validateEmployeeEmail(newEmail, emp);
+				if (!newEmail.equalsIgnoreCase(existing.getEmail())
+						&& repo.existsByEmailIgnoreCase(newEmail)) {
+					throw new IllegalArgumentException("Email already in use by another account");
+				}
+				existing.setEmail(newEmail);
+			}
+
+			// Update password only if provided
+			if (dto.getPasswordHash() != null && !dto.getPasswordHash().isBlank()) {
+				existing.setPasswordHash(dto.getPasswordHash());
 			}
 
 			if (dto.getIsActive() != null) {
@@ -177,13 +194,17 @@ public class UserAccountServiceImpl implements UserAccountService {
 			existing.setRoleIds(new ArrayList<>(requestedRoleIds));
 		}
 
-		// Email update
-		if (dto.getEmail() != null && !dto.getEmail().equalsIgnoreCase(existing.getEmail())
-				&& repo.existsByEmailIgnoreCase(dto.getEmail())) {
-			throw new IllegalArgumentException("Email already in use");
-		}
-		if (dto.getEmail() != null) {
-			existing.setEmail(dto.getEmail());
+		// Email update — must be employee's work or personal email
+		if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
+			String newEmail = dto.getEmail().trim();
+			Employee emp = employeeRepo.findById(existing.getEmployeeId())
+					.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
+			validateEmployeeEmail(newEmail, emp);
+			if (!newEmail.equalsIgnoreCase(existing.getEmail())
+					&& repo.existsByEmailIgnoreCase(newEmail)) {
+				throw new IllegalArgumentException("Email already in use by another account");
+			}
+			existing.setEmail(newEmail);
 		}
 
 		// Password — only update if non-blank
@@ -285,6 +306,25 @@ public class UserAccountServiceImpl implements UserAccountService {
 				throw new IllegalArgumentException(
 						"Role " + rId + " does not belong to company " + companyId);
 			}
+		}
+	}
+
+	/**
+	 * Validates that the given email is either the employee's work email
+	 * or their personal email. Throws if it is neither.
+	 */
+	private void validateEmployeeEmail(String email, Employee emp) {
+		String workEmail = emp.getEmail() != null ? emp.getEmail().toLowerCase() : null;
+		String personalEmail = emp.getPersonalemailid() != null
+				? emp.getPersonalemailid().toLowerCase() : null;
+		String candidate = email.toLowerCase();
+
+		boolean valid = (workEmail != null && workEmail.equals(candidate))
+				|| (personalEmail != null && personalEmail.equals(candidate));
+
+		if (!valid) {
+			throw new IllegalArgumentException(
+					"Email must be the selected employee's work email or personal email.");
 		}
 	}
 }

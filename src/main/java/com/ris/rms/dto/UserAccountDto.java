@@ -4,6 +4,7 @@ import jakarta.validation.constraints.*;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 public class UserAccountDto {
@@ -19,12 +20,20 @@ public class UserAccountDto {
 
 	private String employeeName;
 
-	// Single-role fields — kept for backward compat in list/response serialization
+	// ── Single-role convenience fields (backward compat) ──────────────────
+	// roleId is NO LONGER required — populate from roleIds list
 	private Long roleId;
 	private String roleName;
 
-	// Multi-role field — used in create/update requests
+	// ── Multi-role fields ─────────────────────────────────────────────────
+	/** Full list of role IDs being assigned / returned */
 	private List<Long> roleIds;
+
+	/** Role names matching the roleIds list (same order) */
+	private List<String> roleNames;
+
+	/** Rich role objects: [{roleId, roleName}] — used by the UI to render badges */
+	private List<Map<String, Object>> roles;
 
 	@Email(message = "email must be valid")
 	@NotBlank(message = "email is required")

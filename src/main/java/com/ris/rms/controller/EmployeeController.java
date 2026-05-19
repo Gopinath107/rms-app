@@ -302,7 +302,7 @@ public class EmployeeController {
 			dto.setFirstName(firstName);
 			dto.setMiddleName(middleName);
 			dto.setLastName(lastName);
-
+			dto.setEmail(email != null && !email.isBlank() ? email.trim() : null);
 			dto.setPhoneNumber(phoneNumber);
 			dto.setDepartmentId(departmentId);
 			dto.setExperienceYears(experienceYears);

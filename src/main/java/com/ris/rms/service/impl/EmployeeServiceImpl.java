@@ -440,10 +440,22 @@ public class EmployeeServiceImpl implements EmployeeService {
 			existing.setJobTitle(dto.getJobTitle());
 		if (dto.getGender() != null)
 			existing.setGender(dto.getGender());
-		if (dto.getPersonalEmailId() != null && !dto.getPersonalEmailId().trim().isEmpty()
-				&& !dto.getPersonalEmailId().equalsIgnoreCase(existing.getPersonalemailid())) {
-			validateUniquePersonalEmail(existing.getCompanyId(), dto.getPersonalEmailId(), id);
-			existing.setPersonalemailid(dto.getPersonalEmailId());
+		if (dto.getEmail() != null && !dto.getEmail().trim().isEmpty()
+		        && !dto.getEmail().equalsIgnoreCase(existing.getEmail())) {
+		    validateUniqueEmail(existing.getCompanyId(), dto.getEmail());
+		    existing.setEmail(dto.getEmail());
+		}
+		// Correctly handle updating, keeping, or CLEARING the personal email
+		if (dto.getPersonalEmailId() != null) {
+		    String newPersonalEmail = dto.getPersonalEmailId().isBlank() ? null : dto.getPersonalEmailId().trim();
+		    
+		    // Only proceed if the value actually changed
+		    if (!Objects.equals(newPersonalEmail, existing.getPersonalemailid())) {
+		        if (newPersonalEmail != null) {
+		            validateUniquePersonalEmail(existing.getCompanyId(), newPersonalEmail, id);
+		        }
+		        existing.setPersonalemailid(newPersonalEmail);
+		    }
 		}
 		// Identity
 		if (dto.getDateOfBirth() != null) {
@@ -1024,8 +1036,8 @@ public class EmployeeServiceImpl implements EmployeeService {
 			doc.setVersion(version);
 			doc.setResumeShareMeta(null);
 			doc.setResumeShareStatus(null);
-			employeeDocumentRepo.save(doc);
-
+			employeeDocumentRepo.saveAndFlush(doc); 
+			
 		} else if (isDoc || isDocx) {
 			IConverter converter = null;
 			try (InputStream in = resume.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -1391,7 +1403,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 		e.setCurrentProjectId(dto.getCurrentProjectId());
 		e.setCurrentAccountId(dto.getCurrentAccountId());
 		e.setGender(dto.getGender());
-		e.setPersonalemailid(dto.getPersonalEmailId());
+		e.setPersonalemailid((dto.getPersonalEmailId() != null && dto.getPersonalEmailId().isBlank()) ? null : dto.getPersonalEmailId());
 		// Identity
 		e.setDateOfBirth(dto.getDateOfBirth());
 		e.setCountryOfCitizenship(dto.getCountryOfCitizenship());

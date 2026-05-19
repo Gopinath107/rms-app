@@ -493,8 +493,11 @@ public class CandidateServiceImpl implements CandidateService {
 		if (dto.getPreferredLocation() != null)
 			existing.setPreferredLocation(dto.getPreferredLocation());
 
-		if (dto.getPersonalEmailId() != null)
-			existing.setPersonalEmailId(dto.getPersonalEmailId());
+		// CORRECT WAY to handle update/clear:
+		if (dto.getPersonalEmailId() != null) {
+		    String newPersonalEmail = dto.getPersonalEmailId().isBlank() ? null : dto.getPersonalEmailId().trim();
+		    existing.setPersonalEmailId(newPersonalEmail);
+		}
 
 		if (dto.getComments() != null)
 			existing.setComments(dto.getComments());
@@ -580,9 +583,8 @@ public class CandidateServiceImpl implements CandidateService {
 		Map<Long, List<String>> skillNamesByCand = Collections.emptyMap();
 
 		if (!candidateIds.isEmpty()) {
-			List<CandidateSkill> allSkillLinks = candidateSkillRepo.findAll().stream()
-					.filter(cs -> candidateIds.contains(cs.getCandidateId())).collect(Collectors.toList());
-
+			List<CandidateSkill> allSkillLinks = candidateSkillRepo.findAllByCandidateIdIn(candidateIds);
+			
 			skillIdsByCand = allSkillLinks.stream().collect(Collectors.groupingBy(CandidateSkill::getCandidateId,
 					Collectors.mapping(CandidateSkill::getSkillId, Collectors.toList())));
 
@@ -959,7 +961,7 @@ public class CandidateServiceImpl implements CandidateService {
 		c.setExpectedCtc(dto.getExpectedCtc());
 		c.setNoticePeriod(dto.getNoticePeriod());
 		c.setPreferredLocation(dto.getPreferredLocation());
-		c.setPersonalEmailId(dto.getPersonalEmailId());
+		c.setPersonalEmailId((dto.getPersonalEmailId() != null && dto.getPersonalEmailId().isBlank()) ? null : dto.getPersonalEmailId());
 		c.setComments(dto.getComments());
 		return c;
 	}
@@ -1033,7 +1035,7 @@ public class CandidateServiceImpl implements CandidateService {
 			doc.setVersion(version);
 			doc.setResumeShareMeta(null);
 			doc.setResumeShareStatus(null);
-			candidateDocumentRepo.save(doc);
+			candidateDocumentRepo.saveAndFlush(doc);
 
 		} else if (isDoc || isDocx) {
 			IConverter converter = null;

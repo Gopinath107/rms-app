@@ -55,6 +55,7 @@ public class CandidateController {
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
+			sanitizeDto(dto);
 			CandidateDto result = candidateService.create(dto, resume, documentFiles, documentData);
 			resp.put("result", result);
 			resp.put("success", true);
@@ -79,7 +80,7 @@ public class CandidateController {
 			@RequestPart(value = "resume", required = false) MultipartFile resume,
 			@RequestPart(value = "documentFiles", required = false) List<MultipartFile> documentFiles,
 			@RequestParam(value = "documentData", required = false) String documentData) {
-
+		sanitizeDto(dto);
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
@@ -296,5 +297,11 @@ public class CandidateController {
 		} catch (Exception e) {
 			return List.of();
 		}
+	}
+	
+	private void sanitizeDto(CandidateDto dto) {
+	    if (dto.getPersonalEmailId() != null && dto.getPersonalEmailId().isBlank()) {
+	        dto.setPersonalEmailId(null);
+	    }
 	}
 }

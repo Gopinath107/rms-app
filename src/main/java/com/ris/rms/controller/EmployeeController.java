@@ -49,6 +49,7 @@ public class EmployeeController {
 			@RequestParam(required = false) String joiningDate, @RequestParam(required = false) String employmentType,
 			@RequestParam(required = false) String status,
 			@RequestParam(required = false) java.util.List<Long> skillIds,
+			@RequestParam(required = false) java.util.List<String> skills, 
 			@RequestPart(required = false, name = "resume") org.springframework.web.multipart.MultipartFile resume,
 			@RequestParam(required = false) Long currentProjectId,
 			@RequestParam(required = false) Long currentAccountId, @RequestParam(required = false) String gender,
@@ -59,41 +60,31 @@ public class EmployeeController {
 			@RequestParam(required = false) String trainingSummary,
 			@RequestParam(required = false) String certificationSummary,
 			// Phase 9 new fields
-			@RequestParam(required = false) String middleName,
-			@RequestParam(required = false) String dateOfBirth,
+			@RequestParam(required = false) String middleName, @RequestParam(required = false) String dateOfBirth,
 			@RequestParam(required = false) String primaryCountryCode,
 			@RequestParam(required = false) String primaryContactNo,
 			@RequestParam(required = false) String secondaryCountryCode,
 			@RequestParam(required = false) String secondaryContactNo,
 			@RequestParam(required = false) String countryOfCitizenship,
-			@RequestParam(required = false) String documentType,
-			@RequestParam(required = false) String documentNumber,
-			@RequestParam(required = false) String securityClearance,
-			@RequestParam(required = false) String visa,
-			@RequestParam(required = false) String visaType,
-			@RequestParam(required = false) String country,
-			@RequestParam(required = false) String state,
-			@RequestParam(required = false) String city,
-			@RequestParam(required = false) String zipCode,
-			@RequestParam(required = false) String street,
+			@RequestParam(required = false) String documentType, @RequestParam(required = false) String documentNumber,
+			@RequestParam(required = false) String securityClearance, @RequestParam(required = false) String visa,
+			@RequestParam(required = false) String visaType, @RequestParam(required = false) String country,
+			@RequestParam(required = false) String state, @RequestParam(required = false) String city,
+			@RequestParam(required = false) String zipCode, @RequestParam(required = false) String street,
 			@RequestParam(required = false) String availabilityToJoin,
 			@RequestParam(required = false) String interviewAvailability,
 			@RequestParam(required = false) String highestQualification,
 			@RequestParam(required = false) String universityName,
 			@RequestParam(required = false) String dateOfQualification,
-			@RequestParam(required = false) String usaDegree,
-			@RequestParam(required = false) String currentJobTitle,
+			@RequestParam(required = false) String usaDegree, @RequestParam(required = false) String currentJobTitle,
 			@RequestParam(required = false) String mostRecentEmployer,
-			@RequestParam(required = false) Integer totalExperience,
-			@RequestParam(required = false) String relocate,
-			@RequestParam(required = false) String currency,
-			@RequestParam(required = false) String frequency,
+			@RequestParam(required = false) Integer totalExperience, @RequestParam(required = false) String relocate,
+			@RequestParam(required = false) String currency, @RequestParam(required = false) String frequency,
 			@RequestParam(required = false) java.math.BigDecimal sourcingRate,
 			@RequestParam(required = false) String resumeSummary,
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
-			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks,
+			@RequestParam(required = false) String secondarySkills, @RequestParam(required = false) String socialLinks,
 			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
 			@RequestParam(required = false) String documentData) {
 		var resp = new java.util.LinkedHashMap<String, Object>();
@@ -103,21 +94,23 @@ public class EmployeeController {
 			dto.setFirstName(firstName);
 			dto.setMiddleName(middleName);
 			dto.setLastName(lastName);
+			dto.setEmail(email); 
 			dto.setEmail(email);
 			dto.setPhoneNumber(phoneNumber);
 			dto.setDepartmentId(departmentId);
 			dto.setExperienceYears(experienceYears);
 			dto.setLocation(location);
 			if (joiningDate != null && !joiningDate.isBlank()) {
-			    dto.setJoiningDate(parseJoiningDateFlexible(joiningDate));
+				dto.setJoiningDate(parseJoiningDateFlexible(joiningDate));
 			}
 			dto.setEmploymentType(employmentType);
 			dto.setStatus(status);
 			dto.setSkillIds(skillIds);
+			dto.setSkills(skills); 
 			dto.setCurrentProjectId(currentProjectId);
 			dto.setCurrentAccountId(currentAccountId);
 			dto.setGender(gender);
-			dto.setPersonalEmailId(personalEmailId);
+			dto.setPersonalEmailId(personalEmailId != null && personalEmailId.isBlank() ? null : personalEmailId);
 			dto.setDegrees(degrees);
 			dto.setSpecialization(specialization);
 			dto.setYearOfPassing(yearOfPassing);
@@ -130,7 +123,10 @@ public class EmployeeController {
 			dto.setSecondaryCountryCode(secondaryCountryCode);
 			dto.setSecondaryContactNo(secondaryContactNo);
 			if (dateOfBirth != null && !dateOfBirth.isBlank()) {
-				try { dto.setDateOfBirth(java.time.LocalDate.parse(dateOfBirth)); } catch (Exception ignored) {}
+				try {
+					dto.setDateOfBirth(java.time.LocalDate.parse(dateOfBirth));
+				} catch (Exception ignored) {
+				}
 			}
 			dto.setCountryOfCitizenship(countryOfCitizenship);
 			dto.setDocumentType(documentType);
@@ -148,7 +144,10 @@ public class EmployeeController {
 			dto.setHighestQualification(highestQualification);
 			dto.setUniversityName(universityName);
 			if (dateOfQualification != null && !dateOfQualification.isBlank()) {
-				try { dto.setDateOfQualification(java.time.LocalDate.parse(dateOfQualification)); } catch (Exception ignored) {}
+				try {
+					dto.setDateOfQualification(java.time.LocalDate.parse(dateOfQualification));
+				} catch (Exception ignored) {
+				}
 			}
 			dto.setUsaDegree(usaDegree);
 			dto.setCurrentJobTitle(currentJobTitle);
@@ -163,13 +162,28 @@ public class EmployeeController {
 			// Deserialize JSON arrays
 			com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
 			if (primarySkills != null && !primarySkills.isBlank()) {
-				try { dto.setPrimarySkills(om.readValue(primarySkills, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setPrimarySkills(om.readValue(primarySkills,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 			if (secondarySkills != null && !secondarySkills.isBlank()) {
-				try { dto.setSecondarySkills(om.readValue(secondarySkills, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setSecondarySkills(om.readValue(secondarySkills,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 			if (socialLinks != null && !socialLinks.isBlank()) {
-				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setSocialLinks(om.readValue(socialLinks,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 
 			java.util.Set<jakarta.validation.ConstraintViolation<EmployeeDto>> violations = validator.validate(dto);
@@ -203,7 +217,6 @@ public class EmployeeController {
 		}
 	}
 
-
 	@GetMapping("/list")
 	public ResponseEntity<Map<String, Object>> list(@RequestParam(required = false) Long id,
 			@RequestParam(required = false) Long companyId, @RequestParam(required = false) String q,
@@ -236,17 +249,18 @@ public class EmployeeController {
 	@PutMapping(path = "/Update", consumes = "multipart/form-data", produces = "application/json")
 	public ResponseEntity<Map<String, Object>> updateMultipart(@RequestParam Long employeeId,
 			@RequestParam(required = false) Long companyId, @RequestParam(required = false) String firstName,
-			@RequestParam(required = false) String middleName,
-			@RequestParam(required = false) String lastName, @RequestParam(required = false) String phoneNumber,
-			@RequestParam(required = false) Long departmentId, @RequestParam(required = false) Integer experienceYears,
-			@RequestParam(required = false) String location, @RequestParam(required = false) String joiningDate,
-			@RequestParam(required = false) String employmentType, @RequestParam(required = false) String status,
+			@RequestParam(required = false) String middleName, @RequestParam(required = false) String lastName,
+			@RequestParam(required = false) String email, 
+			@RequestParam(required = false) String phoneNumber, @RequestParam(required = false) Long departmentId,
+			@RequestParam(required = false) Integer experienceYears, @RequestParam(required = false) String location,
+			@RequestParam(required = false) String joiningDate, @RequestParam(required = false) String employmentType,
+			@RequestParam(required = false) String status,
 			@RequestParam(required = false) java.util.List<Long> skillIds,
 			@RequestPart(required = false, name = "resume") org.springframework.web.multipart.MultipartFile resume,
 			@RequestParam(required = false) Long currentProjectId,
 			@RequestParam(required = false) Long currentAccountId, @RequestParam(required = false) String gender,
-			@RequestParam(required = false) String personalEmailId,
-			@RequestParam(required = false) String degrees, @RequestParam(required = false) String specialization,
+			@RequestParam(required = false) String personalEmailId, @RequestParam(required = false) String degrees,
+			@RequestParam(required = false) String specialization,
 			@RequestParam(required = false) Integer yearOfPassing,
 			@RequestParam(required = false) String profileSummary,
 			@RequestParam(required = false) String trainingSummary,
@@ -258,34 +272,25 @@ public class EmployeeController {
 			@RequestParam(required = false) String secondaryCountryCode,
 			@RequestParam(required = false) String secondaryContactNo,
 			@RequestParam(required = false) String countryOfCitizenship,
-			@RequestParam(required = false) String documentType,
-			@RequestParam(required = false) String documentNumber,
-			@RequestParam(required = false) String securityClearance,
-			@RequestParam(required = false) String visa,
-			@RequestParam(required = false) String visaType,
-			@RequestParam(required = false) String country,
-			@RequestParam(required = false) String state,
-			@RequestParam(required = false) String city,
-			@RequestParam(required = false) String zipCode,
-			@RequestParam(required = false) String street,
+			@RequestParam(required = false) String documentType, @RequestParam(required = false) String documentNumber,
+			@RequestParam(required = false) String securityClearance, @RequestParam(required = false) String visa,
+			@RequestParam(required = false) String visaType, @RequestParam(required = false) String country,
+			@RequestParam(required = false) String state, @RequestParam(required = false) String city,
+			@RequestParam(required = false) String zipCode, @RequestParam(required = false) String street,
 			@RequestParam(required = false) String availabilityToJoin,
 			@RequestParam(required = false) String interviewAvailability,
 			@RequestParam(required = false) String highestQualification,
 			@RequestParam(required = false) String universityName,
 			@RequestParam(required = false) String dateOfQualification,
-			@RequestParam(required = false) String usaDegree,
-			@RequestParam(required = false) String currentJobTitle,
+			@RequestParam(required = false) String usaDegree, @RequestParam(required = false) String currentJobTitle,
 			@RequestParam(required = false) String mostRecentEmployer,
-			@RequestParam(required = false) Integer totalExperience,
-			@RequestParam(required = false) String relocate,
-			@RequestParam(required = false) String currency,
-			@RequestParam(required = false) String frequency,
+			@RequestParam(required = false) Integer totalExperience, @RequestParam(required = false) String relocate,
+			@RequestParam(required = false) String currency, @RequestParam(required = false) String frequency,
 			@RequestParam(required = false) java.math.BigDecimal sourcingRate,
 			@RequestParam(required = false) String resumeSummary,
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
-			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks,
+			@RequestParam(required = false) String secondarySkills, @RequestParam(required = false) String socialLinks,
 			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
 			@RequestParam(required = false) String documentData) {
 
@@ -297,12 +302,13 @@ public class EmployeeController {
 			dto.setFirstName(firstName);
 			dto.setMiddleName(middleName);
 			dto.setLastName(lastName);
+
 			dto.setPhoneNumber(phoneNumber);
 			dto.setDepartmentId(departmentId);
 			dto.setExperienceYears(experienceYears);
 			dto.setLocation(location);
 			if (joiningDate != null && !joiningDate.isBlank()) {
-			    dto.setJoiningDate(parseJoiningDateFlexible(joiningDate));
+				dto.setJoiningDate(parseJoiningDateFlexible(joiningDate));
 			}
 			dto.setEmploymentType(employmentType);
 			dto.setStatus(status);
@@ -310,7 +316,7 @@ public class EmployeeController {
 			dto.setCurrentProjectId(currentProjectId);
 			dto.setCurrentAccountId(currentAccountId);
 			dto.setGender(gender);
-			dto.setPersonalEmailId(personalEmailId);
+			dto.setPersonalEmailId(personalEmailId != null && personalEmailId.isBlank() ? null : personalEmailId);
 			dto.setDegrees(degrees);
 			dto.setSpecialization(specialization);
 			dto.setYearOfPassing(yearOfPassing);
@@ -323,7 +329,10 @@ public class EmployeeController {
 			dto.setSecondaryCountryCode(secondaryCountryCode);
 			dto.setSecondaryContactNo(secondaryContactNo);
 			if (dateOfBirth != null && !dateOfBirth.isBlank()) {
-				try { dto.setDateOfBirth(java.time.LocalDate.parse(dateOfBirth)); } catch (Exception ignored) {}
+				try {
+					dto.setDateOfBirth(java.time.LocalDate.parse(dateOfBirth));
+				} catch (Exception ignored) {
+				}
 			}
 			dto.setCountryOfCitizenship(countryOfCitizenship);
 			dto.setDocumentType(documentType);
@@ -341,7 +350,10 @@ public class EmployeeController {
 			dto.setHighestQualification(highestQualification);
 			dto.setUniversityName(universityName);
 			if (dateOfQualification != null && !dateOfQualification.isBlank()) {
-				try { dto.setDateOfQualification(java.time.LocalDate.parse(dateOfQualification)); } catch (Exception ignored) {}
+				try {
+					dto.setDateOfQualification(java.time.LocalDate.parse(dateOfQualification));
+				} catch (Exception ignored) {
+				}
 			}
 			dto.setUsaDegree(usaDegree);
 			dto.setCurrentJobTitle(currentJobTitle);
@@ -355,13 +367,28 @@ public class EmployeeController {
 			dto.setSuggestedKeywords(suggestedKeywords);
 			com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
 			if (primarySkills != null && !primarySkills.isBlank()) {
-				try { dto.setPrimarySkills(om.readValue(primarySkills, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setPrimarySkills(om.readValue(primarySkills,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 			if (secondarySkills != null && !secondarySkills.isBlank()) {
-				try { dto.setSecondarySkills(om.readValue(secondarySkills, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setSecondarySkills(om.readValue(secondarySkills,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 			if (socialLinks != null && !socialLinks.isBlank()) {
-				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
+				try {
+					dto.setSocialLinks(om.readValue(socialLinks,
+							new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {
+							}));
+				} catch (Exception ignored) {
+				}
 			}
 
 			java.util.Set<jakarta.validation.ConstraintViolation<EmployeeDto>> violations = validator.validate(dto);
@@ -392,7 +419,6 @@ public class EmployeeController {
 			return ResponseEntity.badRequest().body(resp);
 		}
 	}
-
 
 	@DeleteMapping("/delete")
 	public ResponseEntity<Map<String, Object>> delete(@RequestBody Map<String, Object> body) {
@@ -508,7 +534,6 @@ public class EmployeeController {
 		return StringUtils.hasText(m) ? m : e.getClass().getSimpleName();
 	}
 
-
 	private static LocalDate parseJoiningDateFlexible(String dateStr) {
 		if (dateStr == null || dateStr.isBlank()) {
 			return null;
@@ -533,7 +558,7 @@ public class EmployeeController {
 		throw new IllegalArgumentException("Invalid joiningDate format: '" + dateStr
 				+ "'. Allowed formats: yyyy-MM-dd, dd-MM-yyyy, dd/MM/yyyy, MM/dd/yyyy, yyyy/MM/dd");
 	}
-	
+
 	private static Long asLong(Object o) {
 		if (o == null)
 			return null;

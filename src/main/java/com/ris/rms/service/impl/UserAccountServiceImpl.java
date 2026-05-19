@@ -39,12 +39,12 @@ public class UserAccountServiceImpl implements UserAccountService {
 			throw new IllegalArgumentException("Employee must belong to the same company");
 		}
 
-		Role role = roleRepo.findById(dto.getRoleId())
-				.orElseThrow(() -> new IllegalArgumentException("Role not found"));
-
-		if (!Objects.equals(role.getCompanyId(), dto.getCompanyId())) {
-			throw new IllegalArgumentException("Role must belong to the same company");
+		// Resolve requested role IDs (prefer roleIds list, fall back to single roleId)
+		List<Long> requestedRoleIds = resolveRoleIds(dto);
+		if (requestedRoleIds.isEmpty()) {
+			throw new IllegalArgumentException("At least one roleId is required");
 		}
+		validateRoles(requestedRoleIds, dto.getCompanyId());
 
 		Optional<UserAccount> existingOpt = repo.findByEmployeeId(dto.getEmployeeId());
 		UserAccount saved;
@@ -56,11 +56,14 @@ public class UserAccountServiceImpl implements UserAccountService {
 				throw new IllegalArgumentException("User exists but belongs to a different company");
 			}
 
+			// Merge: add any new role IDs that are not already present
 			if (existing.getRoleIds() == null) {
 				existing.setRoleIds(new ArrayList<>());
 			}
-			if (!existing.getRoleIds().contains(dto.getRoleId())) {
-				existing.getRoleIds().add(dto.getRoleId());
+			for (Long rId : requestedRoleIds) {
+				if (!existing.getRoleIds().contains(rId)) {
+					existing.getRoleIds().add(rId);
+				}
 			}
 
 			if (dto.getIsActive() != null) {
@@ -83,11 +86,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 			ua.setUserId(null);
 			ua.setCompanyId(dto.getCompanyId());
 			ua.setEmployeeId(dto.getEmployeeId());
-			
-			List<Long> roles = new ArrayList<>();
-			roles.add(dto.getRoleId());
-			ua.setRoleIds(roles);
-			
+			ua.setRoleIds(new ArrayList<>(requestedRoleIds));
 			ua.setEmail(dto.getEmail());
 			ua.setPasswordHash(dto.getPasswordHash());
 			ua.setIsActive(dto.getIsActive() == null ? Boolean.TRUE : dto.getIsActive());
@@ -95,12 +94,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 			saved = repo.save(ua);
 		}
 
-		
-		UserAccountDto responseDto = toDto(saved, comp.getCompanyName(), emp.getFirstName() + " " + emp.getLastName(), null);
-		responseDto.setRoleId(dto.getRoleId());
-		responseDto.setRoleName(role.getRoleName());
-		
-		return responseDto;
+		return toDto(saved, comp.getCompanyName(), emp.getFirstName() + " " + emp.getLastName());
 	}
 
 	@Override
@@ -149,8 +143,7 @@ public class UserAccountServiceImpl implements UserAccountService {
                     if (rIds == null || rIds.isEmpty()) {
                         return Stream.of(toDto(u, 
                         		companyRepo.findById(u.getCompanyId()).map(Company::getCompanyName).orElse(null), 
-                        		employeeRepo.findById(u.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null), 
-                        		null));
+                        		employeeRepo.findById(u.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null)));
                     }
 
                     return rIds.stream().map(rId -> {
@@ -188,35 +181,13 @@ public class UserAccountServiceImpl implements UserAccountService {
 		if (dto.getEmployeeId() != null && !dto.getEmployeeId().equals(existing.getEmployeeId())) {
 			throw new IllegalArgumentException("employeeId cannot be changed");
 		}
-		
-		String updatedRoleName = null;
-		Long updatedRoleId = null;
 
-		if (dto.getRoleId() != null) {
-			Role role = roleRepo.findById(dto.getRoleId())
-					.orElseThrow(() -> new IllegalArgumentException("Role not found"));
-			if (!role.getCompanyId().equals(existing.getCompanyId())) {
-				throw new IllegalArgumentException("Role must belong to the same company");
-			}
-			
-			updatedRoleName = role.getRoleName();
-			updatedRoleId = role.getRoleId();
-			
-			
-			List<Long> currentRoles = existing.getRoleIds();
-			if (currentRoles == null) {
-				currentRoles = new ArrayList<>();
-			}
-			
-			if (currentRoles.isEmpty()) {
-				currentRoles.add(dto.getRoleId());
-			} else {
-			
-				currentRoles.remove(dto.getRoleId());
-				
-				currentRoles.add(0, dto.getRoleId());
-			}
-			existing.setRoleIds(currentRoles);
+		// Resolve the full list of requested roleIds
+		List<Long> requestedRoleIds = resolveRoleIds(dto);
+		if (!requestedRoleIds.isEmpty()) {
+			validateRoles(requestedRoleIds, existing.getCompanyId());
+			// REPLACE the stored roleIds with exactly what was sent
+			existing.setRoleIds(new ArrayList<>(requestedRoleIds));
 		}
 
 		if (dto.getEmail() != null && !dto.getEmail().equalsIgnoreCase(existing.getEmail())
@@ -238,17 +209,8 @@ public class UserAccountServiceImpl implements UserAccountService {
 		String companyName = companyRepo.findById(saved.getCompanyId()).map(Company::getCompanyName).orElse(null);
 		String employeeName = employeeRepo.findById(saved.getEmployeeId())
 				.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
-		
-		if (updatedRoleId == null && saved.getRoleId() != null) {
-			updatedRoleId = saved.getRoleId();
-			updatedRoleName = roleRepo.findById(updatedRoleId).map(Role::getRoleName).orElse(null);
-		}
 
-		UserAccountDto response = toDto(saved, companyName, employeeName, null);
-		response.setRoleId(updatedRoleId);
-		response.setRoleName(updatedRoleName);
-		
-		return response;
+		return toDto(saved, companyName, employeeName);
 	}
 
 	@Override
@@ -258,20 +220,50 @@ public class UserAccountServiceImpl implements UserAccountService {
 		repo.deleteById(id);
 	}
 
-	private UserAccountDto toDto(UserAccount u, String companyName, String employeeName, String roleName) {
+	private UserAccountDto toDto(UserAccount u, String companyName, String employeeName) {
 		UserAccountDto dto = new UserAccountDto();
 		dto.setUserId(u.getUserId());
 		dto.setCompanyId(u.getCompanyId());
 		dto.setCompanyName(companyName);
 		dto.setEmployeeId(u.getEmployeeId());
 		dto.setEmployeeName(employeeName);
-		
-		dto.setRoleId(u.getRoleId());
-		dto.setRoleName(roleName);
-		
+
+		// Populate both the list AND the first-role convenience fields
+		List<Long> storedRoleIds = u.getRoleIds();
+		dto.setRoleIds(storedRoleIds != null ? storedRoleIds : List.of());
+		if (storedRoleIds != null && !storedRoleIds.isEmpty()) {
+			Long primaryRoleId = storedRoleIds.get(0);
+			dto.setRoleId(primaryRoleId);
+			dto.setRoleName(roleRepo.findById(primaryRoleId).map(Role::getRoleName).orElse(null));
+		}
+
 		dto.setEmail(u.getEmail());
 		dto.setIsActive(u.getIsActive());
 
 		return dto;
+	}
+
+	/** Resolve list of roleIds from DTO — prefer roleIds list, fall back to single roleId */
+	private List<Long> resolveRoleIds(UserAccountDto dto) {
+		if (dto.getRoleIds() != null && !dto.getRoleIds().isEmpty()) {
+			return dto.getRoleIds();
+		}
+		if (dto.getRoleId() != null) {
+			List<Long> single = new ArrayList<>();
+			single.add(dto.getRoleId());
+			return single;
+		}
+		return new ArrayList<>();
+	}
+
+	/** Validate that all requested roles exist and belong to the given company */
+	private void validateRoles(List<Long> roleIds, Long companyId) {
+		for (Long rId : roleIds) {
+			Role role = roleRepo.findById(rId)
+					.orElseThrow(() -> new IllegalArgumentException("Role not found: " + rId));
+			if (!Objects.equals(role.getCompanyId(), companyId)) {
+				throw new IllegalArgumentException("Role " + rId + " does not belong to company " + companyId);
+			}
+		}
 	}
 }

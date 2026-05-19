@@ -3,6 +3,8 @@ package com.ris.rms.dto;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 public class UserAccountDto {
 	private Long userId;
@@ -17,10 +19,12 @@ public class UserAccountDto {
 
 	private String employeeName;
 
-	@NotNull(message = "roleId is required")
+	// Single-role fields — kept for backward compat in list/response serialization
 	private Long roleId;
-
 	private String roleName;
+
+	// Multi-role field — used in create/update requests
+	private List<Long> roleIds;
 
 	@Email(message = "email must be valid")
 	@NotBlank(message = "email is required")

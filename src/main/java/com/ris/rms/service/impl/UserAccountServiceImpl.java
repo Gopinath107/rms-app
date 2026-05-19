@@ -3,6 +3,7 @@ package com.ris.rms.service.impl;
 import com.ris.rms.dto.UserAccountDto;
 import com.ris.rms.entity.*;
 import com.ris.rms.repository.*;
+import com.ris.rms.security.PasswordHashUtil;
 import com.ris.rms.service.UserAccountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -21,6 +22,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 	private final CompanyRepository companyRepo;
 	private final EmployeeRepository employeeRepo;
 	private final RoleRepository roleRepo;
+	private final PasswordHashUtil passwordHashUtil;
 
 	// ── Create ────────────────────────────────────────────────────────────────
 
@@ -77,7 +79,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 
 			// Update password only if provided
 			if (dto.getPasswordHash() != null && !dto.getPasswordHash().isBlank()) {
-				existing.setPasswordHash(dto.getPasswordHash());
+				existing.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
 			}
 
 			if (dto.getIsActive() != null) {
@@ -100,7 +102,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 			ua.setEmployeeId(dto.getEmployeeId());
 			ua.setRoleIds(new ArrayList<>(requestedRoleIds));
 			ua.setEmail(dto.getEmail());
-			ua.setPasswordHash(dto.getPasswordHash());
+			ua.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
 			ua.setIsActive(dto.getIsActive() == null ? Boolean.TRUE : dto.getIsActive());
 
 			saved = repo.save(ua);
@@ -209,7 +211,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 
 		// Password — only update if non-blank
 		if (dto.getPasswordHash() != null && !dto.getPasswordHash().isBlank()) {
-			existing.setPasswordHash(dto.getPasswordHash());
+			existing.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
 		}
 
 		if (dto.getIsActive() != null) {

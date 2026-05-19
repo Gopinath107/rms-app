@@ -21,7 +21,16 @@ public class PasswordHashUtil {
         }
     }
 
-    
+    public String hashIfNeeded(String password) {
+        if (password == null || password.isBlank()) {
+            return password;
+        }
+        if (isHexString(password) && password.length() == 64) {
+            return password;
+        }
+        return hashPasswordSHA256(password);
+    }
+
     public boolean verifyPassword(String rawPassword, String storedPassword) {
         if (rawPassword == null || storedPassword == null) {
             return false;

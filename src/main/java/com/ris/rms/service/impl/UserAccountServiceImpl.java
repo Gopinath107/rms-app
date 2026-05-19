@@ -199,14 +199,15 @@ public class UserAccountServiceImpl implements UserAccountService {
 		// Email update — must be employee's work or personal email
 		if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
 			String newEmail = dto.getEmail().trim();
-			Employee emp = employeeRepo.findById(existing.getEmployeeId())
-					.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
-			validateEmployeeEmail(newEmail, emp);
-			if (!newEmail.equalsIgnoreCase(existing.getEmail())
-					&& repo.existsByEmailIgnoreCase(newEmail)) {
-				throw new IllegalArgumentException("Email already in use by another account");
+			if (!newEmail.equalsIgnoreCase(existing.getEmail())) {
+				Employee emp = employeeRepo.findById(existing.getEmployeeId())
+						.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
+				validateEmployeeEmail(newEmail, emp);
+				if (repo.existsByEmailIgnoreCase(newEmail)) {
+					throw new IllegalArgumentException("Email already in use by another account");
+				}
+				existing.setEmail(newEmail);
 			}
-			existing.setEmail(newEmail);
 		}
 
 		// Password — only update if non-blank

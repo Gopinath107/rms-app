@@ -51,6 +51,7 @@ import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandRequestSummaryDto;
 import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.DemandStageCountsDto;
+import com.ris.rms.dto.DetailedResourceReportRequest;
 import com.ris.rms.dto.GroupFlowDto;
 import com.ris.rms.dto.LevelProgressDto;
 import com.ris.rms.dto.ResourceRequestDto;
@@ -1550,6 +1551,238 @@ public class DemandServiceImpl implements DemandService {
 			return Long.valueOf(o.toString());
 		} catch (Exception e) {
 			return null;
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════
+	// DETAILED RESOURCE REPORT (3-sheet Excel)
+	// ═══════════════════════════════════════════════════════
+
+	@Override
+	@Transactional(readOnly = true)
+	public byte[] generateDetailedResourceReport(DetailedResourceReportRequest req) throws Exception {
+		if (req.getUserId() == null) {
+			throw new IllegalArgumentException("userId is required for permission check.");
+		}
+		UserAccount user = userAccountRepo.findById(req.getUserId())
+				.orElseThrow(() -> new IllegalArgumentException("User not found: " + req.getUserId()));
+
+		Pageable unpaged = Pageable.unpaged(Sort.by(Sort.Direction.DESC, "demandopendt"));
+		Page<GroupFlowDto> pageResult = getDemandFlowList(user.getCompanyId(), req.getAccountId(), null, null,
+				req.getFromDate(), req.getToDate(), unpaged);
+
+		List<GroupFlowDto> allRows = pageResult.getContent();
+
+		// If specific demandIds provided, filter
+		if (req.getDemandIds() != null && !req.getDemandIds().isEmpty()) {
+			Set<Long> idSet = new java.util.HashSet<>(req.getDemandIds());
+			allRows = allRows.stream().filter(r -> idSet.contains(r.getGroupId())).toList();
+		}
+
+		Map<Long, List<GroupFlowDto>> byGroup = allRows.stream()
+				.collect(Collectors.groupingBy(GroupFlowDto::getGroupId, LinkedHashMap::new, Collectors.toList()));
+
+		try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+
+			// ── Styles ──
+			CellStyle headerStyle = workbook.createCellStyle();
+			Font headerFont = workbook.createFont();
+			headerFont.setBold(true);
+			headerFont.setColor(IndexedColors.WHITE.getIndex());
+			headerFont.setFontHeightInPoints((short) 11);
+			headerStyle.setFont(headerFont);
+			headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
+			headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			headerStyle.setAlignment(HorizontalAlignment.CENTER);
+			headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+			headerStyle.setBorderBottom(BorderStyle.THIN);
+			headerStyle.setBorderTop(BorderStyle.THIN);
+			headerStyle.setBorderLeft(BorderStyle.THIN);
+			headerStyle.setBorderRight(BorderStyle.THIN);
+			headerStyle.setWrapText(true);
+
+			CellStyle cellStyle = workbook.createCellStyle();
+			Font cellFont = workbook.createFont();
+			cellFont.setFontHeightInPoints((short) 10);
+			cellStyle.setFont(cellFont);
+			cellStyle.setWrapText(true);
+			cellStyle.setVerticalAlignment(VerticalAlignment.TOP);
+			cellStyle.setBorderBottom(BorderStyle.THIN);
+			cellStyle.setBorderTop(BorderStyle.THIN);
+			cellStyle.setBorderLeft(BorderStyle.THIN);
+			cellStyle.setBorderRight(BorderStyle.THIN);
+			cellStyle.setAlignment(HorizontalAlignment.LEFT);
+
+			CellStyle internalStyle = workbook.createCellStyle();
+			internalStyle.cloneStyleFrom(cellStyle);
+			internalStyle.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
+			internalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+			CellStyle externalStyle = workbook.createCellStyle();
+			externalStyle.cloneStyleFrom(cellStyle);
+			externalStyle.setFillForegroundColor(IndexedColors.LAVENDER.getIndex());
+			externalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+			// ══════════════ SHEET 1: Resource Comparison ══════════════
+			Sheet sheet1 = workbook.createSheet("Resource Comparison");
+			String[] h1 = { "Demand ID", "Demand Title", "Account", "Project", "Resource Name",
+					"Resource Type", "Resource ID", "Email", "Phone", "Experience (Yrs)",
+					"Designation", "Resume Status", "Overall Interview Status", "Current Level" };
+
+			Row hRow1 = sheet1.createRow(0);
+			hRow1.setHeightInPoints(30);
+			for (int i = 0; i < h1.length; i++) {
+				setCellHelper(hRow1, i, h1[i], headerStyle);
+			}
+
+			int r1 = 1;
+			for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+				List<GroupFlowDto> groupRows = ge.getValue();
+				GroupFlowDto g0 = groupRows.get(0);
+
+				Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
+						.filter(r -> r.getInterviewId() != null)
+						.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId, LinkedHashMap::new, Collectors.toList()));
+
+				for (Map.Entry<Long, List<GroupFlowDto>> ie : byInterview.entrySet()) {
+					List<GroupFlowDto> ivRows = ie.getValue();
+					GroupFlowDto i0 = ivRows.get(0);
+					boolean isInternal = "EMPLOYEE".equalsIgnoreCase(i0.getResourceType());
+					CellStyle rowStyle = isInternal ? internalStyle : externalStyle;
+
+					String currentLevel = ivRows.stream()
+							.filter(x -> x.getInterviewLevel() != null)
+							.reduce((first, second) -> second)
+							.map(x -> x.getInterviewLevel() + " (" + nvl(x.getInterviewLevelStatus(), "-") + ")")
+							.orElse("-");
+
+					Row row = sheet1.createRow(r1++);
+					int c = 0;
+					setCellHelper(row, c++, "DEM-" + g0.getGroupId(), rowStyle);
+					setCellHelper(row, c++, nvl(g0.getGroupTitle(), "-"), rowStyle);
+					setCellHelper(row, c++, nvl(g0.getAccountName(), "-"), rowStyle);
+					setCellHelper(row, c++, nvl(g0.getProjectName(), "-"), rowStyle);
+					setCellHelper(row, c++, nvl(i0.getCandidateName(), "-"), rowStyle);
+					setCellHelper(row, c++, isInternal ? "INTERNAL" : "EXTERNAL", rowStyle);
+					setCellHelper(row, c++, isInternal ? "EMP-" + i0.getCandidateEmployeeId() : "CAD-" + i0.getCandidateId(), rowStyle);
+					setCellHelper(row, c++, nvl(i0.getCandidateEmail(), "-"), rowStyle);
+					setCellHelper(row, c++, nvl(i0.getCandidatePhoneNumber(), "-"), rowStyle);
+					setCellHelper(row, c++, i0.getCandidateExperience() != null ? String.valueOf(i0.getCandidateExperience()) : "-", rowStyle);
+					setCellHelper(row, c++, nvl(i0.getCandidateDesignation(), "-"), rowStyle);
+					setCellHelper(row, c++, nvl(i0.getCandidateResumeStatus(), "Pending"), rowStyle);
+					setCellHelper(row, c++, nvl(i0.getInterviewOverallStatus(), "In Progress"), rowStyle);
+					setCellHelper(row, c++, currentLevel, rowStyle);
+				}
+			}
+			sheet1.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h1.length - 1));
+			autoSizeColumnsHelper(sheet1, h1.length);
+
+			// ══════════════ SHEET 2: Interview Details ══════════════
+			Sheet sheet2 = workbook.createSheet("Interview Details");
+			String[] h2 = { "Demand ID", "Demand Title", "Resource Name", "Resource Type",
+					"Interview Level", "Level Status", "Interviewer", "Completed Date", "Notes / Feedback" };
+
+			Row hRow2 = sheet2.createRow(0);
+			hRow2.setHeightInPoints(30);
+			for (int i = 0; i < h2.length; i++) {
+				setCellHelper(hRow2, i, h2[i], headerStyle);
+			}
+
+			int r2 = 1;
+			for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+				List<GroupFlowDto> groupRows = ge.getValue();
+				GroupFlowDto g0 = groupRows.get(0);
+
+				Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
+						.filter(r -> r.getInterviewId() != null)
+						.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId, LinkedHashMap::new, Collectors.toList()));
+
+				for (Map.Entry<Long, List<GroupFlowDto>> ie : byInterview.entrySet()) {
+					List<GroupFlowDto> ivRows = ie.getValue();
+					GroupFlowDto i0 = ivRows.get(0);
+					boolean isInternal = "EMPLOYEE".equalsIgnoreCase(i0.getResourceType());
+
+					for (GroupFlowDto lvl : ivRows) {
+						if (lvl.getInterviewLevel() == null) continue;
+						Row row = sheet2.createRow(r2++);
+						int c = 0;
+						setCellHelper(row, c++, "DEM-" + g0.getGroupId(), cellStyle);
+						setCellHelper(row, c++, nvl(g0.getGroupTitle(), "-"), cellStyle);
+						setCellHelper(row, c++, nvl(i0.getCandidateName(), "-"), cellStyle);
+						setCellHelper(row, c++, isInternal ? "INTERNAL" : "EXTERNAL", cellStyle);
+						setCellHelper(row, c++, lvl.getInterviewLevel(), cellStyle);
+						setCellHelper(row, c++, nvl(lvl.getInterviewLevelStatus(), "-"), cellStyle);
+						setCellHelper(row, c++, nvl(lvl.getInterviewerName(), "-"), cellStyle);
+						setCellHelper(row, c++, lvl.getInterviewCompletedAt() != null ? lvl.getInterviewCompletedAt().toLocalDate().toString() : "-", cellStyle);
+						setCellHelper(row, c++, nvl(lvl.getInterviewNotes(), ""), cellStyle);
+					}
+				}
+			}
+			sheet2.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h2.length - 1));
+			autoSizeColumnsHelper(sheet2, h2.length);
+
+			// ══════════════ SHEET 3: Summary Statistics ══════════════
+			Sheet sheet3 = workbook.createSheet("Summary Statistics");
+			String[] h3 = { "Demand ID", "Demand Title", "Account", "Project", "Status", "Priority",
+					"Total Resources", "Internal", "External", "Scheduled", "Selected",
+					"Rejected", "Allocated", "Onboarded" };
+
+			Row hRow3 = sheet3.createRow(0);
+			hRow3.setHeightInPoints(30);
+			for (int i = 0; i < h3.length; i++) {
+				setCellHelper(hRow3, i, h3[i], headerStyle);
+			}
+
+			int r3 = 1;
+			for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+				List<GroupFlowDto> groupRows = ge.getValue();
+				GroupFlowDto g0 = groupRows.get(0);
+
+				Map<Long, GroupFlowDto> uniqueResources = groupRows.stream()
+						.filter(r -> r.getInterviewId() != null)
+						.collect(Collectors.toMap(GroupFlowDto::getInterviewId, r -> r, (a, b) -> a, LinkedHashMap::new));
+
+				long internalCount = uniqueResources.values().stream()
+						.filter(r -> "EMPLOYEE".equalsIgnoreCase(r.getResourceType())).count();
+				long externalCount = uniqueResources.values().stream()
+						.filter(r -> !"EMPLOYEE".equalsIgnoreCase(r.getResourceType())).count();
+
+				Row row = sheet3.createRow(r3++);
+				int c = 0;
+				setCellHelper(row, c++, "DEM-" + g0.getGroupId(), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getGroupTitle(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getAccountName(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getProjectName(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getGroupStatus(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getPriority(), "-"), cellStyle);
+				setCellHelper(row, c++, String.valueOf(uniqueResources.size()), cellStyle);
+				setCellHelper(row, c++, String.valueOf(internalCount), cellStyle);
+				setCellHelper(row, c++, String.valueOf(externalCount), cellStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getSummaryInterviewing(), 0)), cellStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getSummarySelected(), 0)), cellStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getSummaryRejected(), 0)), cellStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getSummaryAllocated(), 0)), cellStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getSummaryOnboarded(), 0)), cellStyle);
+			}
+			sheet3.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h3.length - 1));
+			autoSizeColumnsHelper(sheet3, h3.length);
+
+			workbook.write(out);
+			return out.toByteArray();
+		}
+	}
+
+	private void setCellHelper(Row row, int col, String value, CellStyle style) {
+		Cell cell = row.createCell(col);
+		cell.setCellValue(value != null ? value : "-");
+		cell.setCellStyle(style);
+	}
+
+	private void autoSizeColumnsHelper(Sheet sheet, int colCount) {
+		for (int i = 0; i < colCount; i++) {
+			sheet.autoSizeColumn(i);
+			if (sheet.getColumnWidth(i) > 12000) sheet.setColumnWidth(i, 12000);
+			if (sheet.getColumnWidth(i) < 3000) sheet.setColumnWidth(i, 3000);
 		}
 	}
 }

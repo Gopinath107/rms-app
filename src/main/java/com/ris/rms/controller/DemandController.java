@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.ris.rms.dto.DemandCreateDto;
 import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandResponseDto;
+import com.ris.rms.dto.DetailedResourceReportRequest;
 import com.ris.rms.dto.GroupFlowDto;
 import com.ris.rms.service.DemandMatchingService;
 import com.ris.rms.service.DemandService;
@@ -357,6 +358,22 @@ public class DemandController {
         }
         return out;
     }
+
+	@PostMapping("/exportDetailedReport")
+	public ResponseEntity<byte[]> exportDetailedResourceReport(
+			@RequestBody DetailedResourceReportRequest request) {
+		try {
+			byte[] excelBytes = demandService.generateDetailedResourceReport(request);
+			return ResponseEntity.ok()
+					.header(HttpHeaders.CONTENT_DISPOSITION,
+							"attachment; filename=Detailed_Resource_Report.xlsx")
+					.contentType(MediaType.parseMediaType(
+							"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+					.body(excelBytes);
+		} catch (Exception e) {
+			return ResponseEntity.badRequest().body(null);
+		}
+	}
 
 	private static <T> T nvl(T v, T def) {
 		return v == null ? def : v;

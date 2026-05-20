@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 import com.ris.rms.dto.DemandCreateDto;
 import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandResponseDto;
+import com.ris.rms.dto.DetailedResourceReportRequest;
 import com.ris.rms.dto.GroupFlowDto;
 
 public interface DemandService {
@@ -27,6 +28,8 @@ public interface DemandService {
 	void generateReport(DemandReportRequest request);
 
 	byte[] generateExcelReport(DemandReportRequest request) throws Exception;
+
+	byte[] generateDetailedResourceReport(DetailedResourceReportRequest request) throws Exception;
 	
 	void updateDemandStatusOnResumeShare(Long demandId);
 }

@@ -40,6 +40,7 @@ import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xddf.usermodel.chart.AxisPosition;
 import org.apache.poi.xddf.usermodel.chart.BarDirection;
+import org.apache.poi.xddf.usermodel.chart.BarGrouping;
 import org.apache.poi.xddf.usermodel.chart.ChartTypes;
 import org.apache.poi.xddf.usermodel.chart.XDDFBarChartData;
 import org.apache.poi.xddf.usermodel.chart.XDDFCategoryAxis;
@@ -1723,29 +1724,31 @@ public class DemandServiceImpl implements DemandService {
 			grandTotalCenterStyle.cloneStyleFrom(grandTotalStyle);
 			grandTotalCenterStyle.setAlignment(HorizontalAlignment.CENTER);
 
-			// ── SHEET 0: Demand Summary (active, opens first) ─────────
-			// Layout: one row per demand
-			// Columns: Demand ID | Client | Skill(s) | L1 Rejected | L2 Rejected |
-			//          L3 Rejected | HR Round Rejected | Final Round Rejected |
-			//          Total Rejected | Total Candidates
-			// ──────────────────────────────────────────────────────────
+			// ── SHEET 0: Demand Summary ─────────────────────────────────────────
+			// One row per demand.
+			// Columns: Demand ID | Client | Skill(s) |
+			//   L1 | L2 | L3 | HR Round | Final Round   (total at each level)
+			//   | Allocated | Not Started | Total Candidates
+			// ────────────────────────────────────────────────────────────────────
 			final String[] LEVEL_COLS = {"L1", "L2", "L3", "HR Round", "Final Round"};
-			// total columns = 3 (Demand ID, Client, Skill) + levels + 2 (Total Rejected, Total Candidates)
-			int totalCols = 3 + LEVEL_COLS.length + 2;
+			// 3 fixed + levels + Allocated + Not Started + Total = 3 + 5 + 3 = 11
+			final int totalCols = 3 + LEVEL_COLS.length + 3;
+			final int COL_ALLOC    = 3 + LEVEL_COLS.length;
+			final int COL_NOTSTART = 3 + LEVEL_COLS.length + 1;
+			final int COL_TOTAL    = 3 + LEVEL_COLS.length + 2;
 
 			XSSFSheet pivotSheet = workbook.createSheet("Demand Summary");
 			pivotSheet.setDisplayGridlines(true);
-			// Column widths
-			pivotSheet.setColumnWidth(0, 4000);  // Demand ID
-			pivotSheet.setColumnWidth(1, 5000);  // Client
-			pivotSheet.setColumnWidth(2, 8000);  // Skill(s)
+			pivotSheet.setColumnWidth(0, 4000);
+			pivotSheet.setColumnWidth(1, 5000);
+			pivotSheet.setColumnWidth(2, 8000);
 			for (int i = 3; i < totalCols; i++) pivotSheet.setColumnWidth(i, 3800);
 
-			// ── Title row ──
+			// Title
 			Row rTitle = pivotSheet.createRow(0);
 			rTitle.setHeightInPoints(30);
 			Cell cTitle = rTitle.createCell(0);
-			cTitle.setCellValue("Demand-wise Candidate Summary");
+			cTitle.setCellValue("Demand-wise Candidate Pipeline Summary");
 			XSSFFont titleFont = workbook.createFont();
 			titleFont.setBold(true);
 			titleFont.setFontHeightInPoints((short) 14);
@@ -1756,110 +1759,248 @@ public class DemandServiceImpl implements DemandService {
 			cTitle.setCellStyle(titleStyle);
 			pivotSheet.addMergedRegion(new CellRangeAddress(0, 0, 0, totalCols - 1));
 
-			// ── Subtitle row ──
+			// Subtitle
 			Row rSub = pivotSheet.createRow(1);
 			rSub.setHeightInPoints(16);
 			Cell cSub = rSub.createCell(0);
-			cSub.setCellValue("Per demand: skills, interview-level rejected counts and total candidates  |  Raw data on MasterData sheet");
-			XSSFCellStyle subStyle = workbook.createCellStyle();
-			XSSFFont subFont = workbook.createFont();
-			subFont.setItalic(true);
-			subFont.setFontHeightInPoints((short) 9);
-			subFont.setColor(new XSSFColor(new java.awt.Color(128, 128, 128), null));
-			subStyle.setFont(subFont);
-			cSub.setCellStyle(subStyle);
+			cSub.setCellValue("Each level column = total candidates at that stage (Scheduled + Selected + Rejected)  |  See Charts sheet for graphs");
+			XSSFCellStyle subStyle2 = workbook.createCellStyle();
+			XSSFFont subFont2 = workbook.createFont();
+			subFont2.setItalic(true);
+			subFont2.setFontHeightInPoints((short) 9);
+			subFont2.setColor(new XSSFColor(new java.awt.Color(128, 128, 128), null));
+			subStyle2.setFont(subFont2);
+			cSub.setCellStyle(subStyle2);
 			pivotSheet.addMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
 
 			// Spacer
 			pivotSheet.createRow(2).setHeightInPoints(6);
 
-			// ── Column header row ──
+			// Column headers
 			Row rHead = pivotSheet.createRow(3);
-			rHead.setHeightInPoints(26);
-			setCellHelper(rHead, 0, "Demand ID",       pivotHdrStyle);
-			setCellHelper(rHead, 1, "Client",          pivotHdrStyle);
-			setCellHelper(rHead, 2, "Skill(s)",        pivotHdrStyle);
+			rHead.setHeightInPoints(28);
+			setCellHelper(rHead, 0, "Demand ID",    pivotHdrStyle);
+			setCellHelper(rHead, 1, "Client",       pivotHdrStyle);
+			setCellHelper(rHead, 2, "Skill(s)",     pivotHdrStyle);
 			for (int i = 0; i < LEVEL_COLS.length; i++) {
-				setCellHelper(rHead, 3 + i, LEVEL_COLS[i] + " Rejected", pivotHdrStyle);
+				setCellHelper(rHead, 3 + i, LEVEL_COLS[i], pivotHdrStyle);
 			}
-			setCellHelper(rHead, 3 + LEVEL_COLS.length,     "Total Rejected",    pivotHdrStyle);
-			setCellHelper(rHead, 3 + LEVEL_COLS.length + 1, "Total Candidates",  pivotHdrStyle);
+			setCellHelper(rHead, COL_ALLOC,    "Allocated",   pivotHdrStyle);
+			setCellHelper(rHead, COL_NOTSTART, "Not Started", pivotHdrStyle);
+			setCellHelper(rHead, COL_TOTAL,    "Total",       pivotHdrStyle);
 
-			// ── Aggregate: group masterRows by Demand ID ──
+			// Group masterRows by Demand ID
 			Map<String, List<MasterDataRow>> rowsByDemand = new LinkedHashMap<>();
 			for (MasterDataRow m : masterRows) {
 				rowsByDemand.computeIfAbsent(m.getDemandId(), k -> new ArrayList<>()).add(m);
 			}
 
-			// ── Write one data row per demand ──
+			// Aggregation totals for chart
+			int grandTotal = 0;
+			int grandAlloc = 0;
+			Map<String, Integer> grandByLevel = new LinkedHashMap<>();
+			for (String lv : LEVEL_COLS) grandByLevel.put(lv, 0);
+
+			// Demand-level chart data: demandId → level counts
+			List<String>              chartDemands    = new ArrayList<>();
+			List<Map<String, Integer>> chartLevelData = new ArrayList<>();
+			List<Integer>             chartAllocData  = new ArrayList<>();
+
 			int pivRowIdx = 4;
-			int grandCandidates = 0;
-			int grandRejected   = 0;
-
 			for (Map.Entry<String, List<MasterDataRow>> demEntry : rowsByDemand.entrySet()) {
-				String demandId   = demEntry.getKey();
+				String demandId         = demEntry.getKey();
 				List<MasterDataRow> demRows = demEntry.getValue();
-				MasterDataRow first = demRows.get(0);
+				MasterDataRow first     = demRows.get(0);
 
-				int totalCandidates = demRows.size();
-				grandCandidates += totalCandidates;
-
-				// Count rejected per level
-				Map<String, Integer> rejByLevel = new LinkedHashMap<>();
-				for (String lv : LEVEL_COLS) rejByLevel.put(lv, 0);
-				int totalRejected = 0;
+				int total      = demRows.size();
+				int allocated  = 0;
+				int notStarted = 0;
+				Map<String, Integer> byLevel = new LinkedHashMap<>();
+				for (String lv : LEVEL_COLS) byLevel.put(lv, 0);
 
 				for (MasterDataRow m : demRows) {
-					String lvl = extractLevelFromStatus(m.getStatus());
-					if (lvl != null && isRejectedStatus(m.getStatus())) {
-						rejByLevel.merge(lvl, 1, Integer::sum);
-						totalRejected++;
+					String status = m.getStatus();
+					String lvl    = extractLevelFromStatus(status);
+					if (lvl != null) {
+						byLevel.merge(lvl, 1, Integer::sum);
+					} else {
+						// Pending / no level
+						notStarted++;
 					}
+					// Allocated = candidated with "Selected" / "Allocated" (final outcome)
+					if (isAllocatedStatus(status)) allocated++;
 				}
-				grandRejected += totalRejected;
 
-				// Alternate row shading
-				XSSFCellStyle rowCellStyle   = (pivRowIdx % 2 == 0) ? cellStyle : altRowStyle;
-				XSSFCellStyle rowCenterStyle = (pivRowIdx % 2 == 0) ? centerStyle : altCenterStyle;
+				// Accumulate grand totals
+				grandTotal += total;
+				grandAlloc += allocated;
+				for (String lv : LEVEL_COLS) {
+					grandByLevel.merge(lv, byLevel.getOrDefault(lv, 0), Integer::sum);
+				}
+
+				// Store for chart
+				chartDemands.add(demandId);
+				chartLevelData.add(byLevel);
+				chartAllocData.add(allocated);
+
+				// Alternating row shading
+				XSSFCellStyle rcs = (pivRowIdx % 2 == 0) ? cellStyle    : altRowStyle;
+				XSSFCellStyle rcc = (pivRowIdx % 2 == 0) ? centerStyle  : altCenterStyle;
 
 				Row row = pivotSheet.createRow(pivRowIdx++);
 				row.setHeightInPoints(20);
-				setCellHelper(row, 0, demandId,           rowCellStyle);
-				setCellHelper(row, 1, first.getClient(),  rowCellStyle);
-				setCellHelper(row, 2, first.getSkill(),   rowCellStyle);
+				setCellHelper(row, 0, demandId,          rcs);
+				setCellHelper(row, 1, first.getClient(), rcs);
+				setCellHelper(row, 2, first.getSkill(),  rcs);
 				for (int i = 0; i < LEVEL_COLS.length; i++) {
 					Cell c = row.createCell(3 + i);
-					c.setCellValue(rejByLevel.getOrDefault(LEVEL_COLS[i], 0));
-					c.setCellStyle(rowCenterStyle);
+					c.setCellValue(byLevel.getOrDefault(LEVEL_COLS[i], 0));
+					c.setCellStyle(rcc);
 				}
-				Cell cTR = row.createCell(3 + LEVEL_COLS.length);
-				cTR.setCellValue(totalRejected);
-				cTR.setCellStyle(rowCenterStyle);
-				Cell cTC = row.createCell(3 + LEVEL_COLS.length + 1);
-				cTC.setCellValue(totalCandidates);
-				cTC.setCellStyle(rowCenterStyle);
+				Cell ca = row.createCell(COL_ALLOC);
+				ca.setCellValue(allocated);
+				ca.setCellStyle(rcc);
+				Cell cn = row.createCell(COL_NOTSTART);
+				cn.setCellValue(notStarted);
+				cn.setCellStyle(rcc);
+				Cell ct = row.createCell(COL_TOTAL);
+				ct.setCellValue(total);
+				ct.setCellStyle(rcc);
 			}
 
-			// ── Grand Total row ──
+			// Grand Total row
 			Row rGT = pivotSheet.createRow(pivRowIdx);
 			rGT.setHeightInPoints(22);
 			setCellHelper(rGT, 0, "Grand Total", grandTotalStyle);
 			setCellHelper(rGT, 1, "",            grandTotalStyle);
 			setCellHelper(rGT, 2, "",            grandTotalStyle);
 			for (int i = 0; i < LEVEL_COLS.length; i++) {
-				setCellHelper(rGT, 3 + i, "", grandTotalStyle);
+				Cell c = rGT.createCell(3 + i);
+				c.setCellValue(grandByLevel.getOrDefault(LEVEL_COLS[i], 0));
+				c.setCellStyle(grandTotalCenterStyle);
 			}
-			Cell cGTRej = rGT.createCell(3 + LEVEL_COLS.length);
-			cGTRej.setCellValue(grandRejected);
-			cGTRej.setCellStyle(grandTotalCenterStyle);
-			Cell cGTTot = rGT.createCell(3 + LEVEL_COLS.length + 1);
-			cGTTot.setCellValue(grandCandidates);
-			cGTTot.setCellStyle(grandTotalCenterStyle);
+			Cell cGA = rGT.createCell(COL_ALLOC);
+			cGA.setCellValue(grandAlloc);
+			cGA.setCellStyle(grandTotalCenterStyle);
+			Cell cGNS = rGT.createCell(COL_NOTSTART);
+			cGNS.setCellValue(grandTotal - grandAlloc);
+			cGNS.setCellStyle(grandTotalCenterStyle);
+			Cell cGT2 = rGT.createCell(COL_TOTAL);
+			cGT2.setCellValue(grandTotal);
+			cGT2.setCellStyle(grandTotalCenterStyle);
 
-			// Auto-size all columns
 			autoSizeColumnsHelper(pivotSheet, totalCols);
 
-			// ── SHEET 1: MasterData (raw rows) ────────────────────────
+			// ── SHEET 1: Charts ──────────────────────────────────────────────────
+			// Write helper data then create a clustered bar chart (pipeline by demand)
+			// and a pie chart (allocated vs not allocated overall).
+			// ────────────────────────────────────────────────────────────────────
+			XSSFSheet chartSheet = workbook.createSheet("Charts");
+			chartSheet.setDisplayGridlines(false);
+
+			// ── Chart 1 helper data: Pipeline by Demand ──
+			// Row 0: Header (Demand ID, L1, L2, L3, HR Round, Final Round, Allocated)
+			// Row 1..N: one row per demand
+			int chartDataStartRow = 0;
+			Row chHdr = chartSheet.createRow(chartDataStartRow);
+			chHdr.setHeightInPoints(18);
+			setCellHelper(chHdr, 0, "Demand ID", navyHdrStyle);
+			for (int i = 0; i < LEVEL_COLS.length; i++) {
+				setCellHelper(chHdr, 1 + i, LEVEL_COLS[i], navyHdrStyle);
+			}
+			setCellHelper(chHdr, 1 + LEVEL_COLS.length, "Allocated", navyHdrStyle);
+
+			int numDemands = chartDemands.size();
+			for (int d = 0; d < numDemands; d++) {
+				Row chRow = chartSheet.createRow(chartDataStartRow + 1 + d);
+				chRow.setHeightInPoints(16);
+				setCellHelper(chRow, 0, chartDemands.get(d), cellStyle);
+				Map<String, Integer> dm = chartLevelData.get(d);
+				for (int i = 0; i < LEVEL_COLS.length; i++) {
+					Cell c = chRow.createCell(1 + i);
+					c.setCellValue(dm.getOrDefault(LEVEL_COLS[i], 0));
+					c.setCellStyle(centerStyle);
+				}
+				Cell ca2 = chRow.createCell(1 + LEVEL_COLS.length);
+				ca2.setCellValue(chartAllocData.get(d));
+				ca2.setCellStyle(centerStyle);
+			}
+
+			// ── Chart 1: Clustered column chart — pipeline per demand ──
+			if (numDemands > 0) {
+				XSSFDrawing drawing1 = chartSheet.createDrawingPatriarch();
+				XSSFClientAnchor anchor1 = drawing1.createAnchor(0, 0, 0, 0, 9, 0, 25, 20);
+				XSSFChart chart1 = drawing1.createChart(anchor1);
+				chart1.setTitleText("Candidate Pipeline by Demand");
+				chart1.setTitleOverlay(false);
+
+				XDDFCategoryAxis catAxis1 = chart1.createCategoryAxis(AxisPosition.BOTTOM);
+				catAxis1.setTitle("Demand ID");
+				XDDFValueAxis valAxis1 = chart1.createValueAxis(AxisPosition.LEFT);
+				valAxis1.setTitle("Candidates");
+
+				XDDFDataSource<String> demCats = XDDFDataSourcesFactory.fromStringCellRange(
+						chartSheet, new CellRangeAddress(1, numDemands, 0, 0));
+
+				XDDFChartData barData1 = chart1.createData(ChartTypes.BAR, catAxis1, valAxis1);
+				if (barData1 instanceof XDDFBarChartData) {
+					((XDDFBarChartData) barData1).setBarDirection(BarDirection.COL);
+					((XDDFBarChartData) barData1).setBarGrouping(BarGrouping.CLUSTERED);
+				}
+
+				// One series per level
+				String[] chartSeriesNames = new String[LEVEL_COLS.length + 1];
+				System.arraycopy(LEVEL_COLS, 0, chartSeriesNames, 0, LEVEL_COLS.length);
+				chartSeriesNames[LEVEL_COLS.length] = "Allocated";
+
+				for (int s = 0; s < chartSeriesNames.length; s++) {
+					XDDFNumericalDataSource<Double> serVals = XDDFDataSourcesFactory.fromNumericCellRange(
+							chartSheet, new CellRangeAddress(1, numDemands, 1 + s, 1 + s));
+					XDDFChartData.Series ser = barData1.addSeries(demCats, serVals);
+					ser.setTitle(chartSeriesNames[s], null);
+				}
+				chart1.plot(barData1);
+			}
+
+			// ── Chart 2 helper data: Allocation status pie (grand total) ──
+			// Write in a small table below the pipeline data (row numDemands+3)
+			int pieDataRow = numDemands + 3;
+			Row pieHdr = chartSheet.createRow(pieDataRow);
+			pieHdr.setHeightInPoints(18);
+			setCellHelper(pieHdr, 0, "Status",    navyHdrStyle);
+			setCellHelper(pieHdr, 1, "Count",     navyHdrStyle);
+			Row pieR1 = chartSheet.createRow(pieDataRow + 1);
+			setCellHelper(pieR1, 0, "Allocated",  cellStyle);
+			Cell pieV1 = pieR1.createCell(1);
+			pieV1.setCellValue(grandAlloc);
+			pieV1.setCellStyle(centerStyle);
+			Row pieR2 = chartSheet.createRow(pieDataRow + 2);
+			setCellHelper(pieR2, 0, "In Progress / Pending", cellStyle);
+			Cell pieV2 = pieR2.createCell(1);
+			pieV2.setCellValue(grandTotal - grandAlloc);
+			pieV2.setCellStyle(centerStyle);
+
+			// ── Chart 2: Pie chart — Allocation status ──
+			if (grandTotal > 0) {
+				XSSFDrawing drawing2 = chartSheet.createDrawingPatriarch();
+				XSSFClientAnchor anchor2 = drawing2.createAnchor(0, 0, 0, 0, 9, 21, 19, 38);
+				XSSFChart chart2 = drawing2.createChart(anchor2);
+				chart2.setTitleText("Overall Allocation Status");
+				chart2.setTitleOverlay(false);
+
+				XDDFDataSource<String> pieCats = XDDFDataSourcesFactory.fromStringCellRange(
+						chartSheet, new CellRangeAddress(pieDataRow + 1, pieDataRow + 2, 0, 0));
+				XDDFNumericalDataSource<Double> pieVals = XDDFDataSourcesFactory.fromNumericCellRange(
+						chartSheet, new CellRangeAddress(pieDataRow + 1, pieDataRow + 2, 1, 1));
+				XDDFChartData pieData = chart2.createData(ChartTypes.PIE, null, null);
+				pieData.addSeries(pieCats, pieVals);
+				chart2.plot(pieData);
+			}
+
+			// Hide helper data columns (they sit to the left of the charts)
+			for (int i = 0; i <= 1 + LEVEL_COLS.length; i++) chartSheet.setColumnHidden(i, true);
+
+			// ── SHEET 2: MasterData (raw rows) ──────────────────────────────────
 			XSSFSheet masterSheet = workbook.createSheet("MasterData");
 			masterSheet.setDisplayGridlines(true);
 
@@ -1887,7 +2028,7 @@ public class DemandServiceImpl implements DemandService {
 			}
 			autoSizeColumnsHelper(masterSheet, mHeaders.length);
 
-			// Pivot Summary is active (index 0)
+			// Sheet 0 (Demand Summary) is active
 			workbook.setActiveSheet(0);
 			workbook.setSelectedTab(0);
 
@@ -1896,6 +2037,7 @@ public class DemandServiceImpl implements DemandService {
 		}
 	}
 
+	
 
 	private static class MasterDataRow {
 		private String client;
@@ -2024,4 +2166,21 @@ public class DemandServiceImpl implements DemandService {
 		String upper = status.toUpperCase();
 		return upper.contains("REJECT") || upper.contains("DROP") || upper.contains("DUPLICATE");
 	}
-}
+
+	/**
+	 * Returns true if the candidate has been finally allocated/selected.
+	 * "Selected" alone (no level prefix) or containing "Allocated" means they made it.
+	 */
+	private static boolean isAllocatedStatus(String status) {
+		if (status == null) return false;
+		String trimmed = status.trim();
+		String upper   = trimmed.toUpperCase();
+		// Pure "Selected" (not "L1 Selected" – that just means they passed L1)
+		if (upper.equals("SELECTED") || upper.equals("ALLOCATED")) return true;
+		// "Final Round Selected" counts as allocated
+		if (upper.startsWith("FINAL") && upper.contains("SELECT")) return true;
+		// Anything explicitly containing "Allocated"
+		if (upper.contains("ALLOCATED")) return true;
+		return false;
+	}
+}

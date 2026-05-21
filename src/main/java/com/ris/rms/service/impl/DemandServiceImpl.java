@@ -10,19 +10,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.DataConsolidateFunction;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
@@ -31,6 +35,27 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.VerticalAlignment;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.util.AreaReference;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.ss.util.CellReference;
+import org.apache.poi.xddf.usermodel.chart.AxisPosition;
+import org.apache.poi.xddf.usermodel.chart.BarDirection;
+import org.apache.poi.xddf.usermodel.chart.ChartTypes;
+import org.apache.poi.xddf.usermodel.chart.XDDFBarChartData;
+import org.apache.poi.xddf.usermodel.chart.XDDFCategoryAxis;
+import org.apache.poi.xddf.usermodel.chart.XDDFChartData;
+import org.apache.poi.xddf.usermodel.chart.XDDFDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFDataSourcesFactory;
+import org.apache.poi.xddf.usermodel.chart.XDDFNumericalDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFValueAxis;
+import org.apache.poi.xssf.usermodel.XSSFChart;
+import org.apache.poi.xssf.usermodel.XSSFCellStyle;
+import org.apache.poi.xssf.usermodel.XSSFClientAnchor;
+import org.apache.poi.xssf.usermodel.XSSFColor;
+import org.apache.poi.xssf.usermodel.XSSFDrawing;
+import org.apache.poi.xssf.usermodel.XSSFFont;
+import org.apache.poi.xssf.usermodel.XSSFPivotTable;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -1555,7 +1580,10 @@ public class DemandServiceImpl implements DemandService {
 	}
 
 	// ═══════════════════════════════════════════════════════
-	// DETAILED RESOURCE REPORT (3-sheet Excel)
+	// DETAILED RESOURCE REPORT  — Real XSSFPivotTable version
+	// Sheet layout:
+	//   [0] MasterData  — raw candidate rows (pivot data source)
+	//   [1] Pivot       — XSSFPivotTable + column chart  (active)
 	// ═══════════════════════════════════════════════════════
 
 	@Override
@@ -1573,7 +1601,6 @@ public class DemandServiceImpl implements DemandService {
 
 		List<GroupFlowDto> allRows = pageResult.getContent();
 
-		// If specific demandIds provided, filter
 		if (req.getDemandIds() != null && !req.getDemandIds().isEmpty()) {
 			Set<Long> idSet = new java.util.HashSet<>(req.getDemandIds());
 			allRows = allRows.stream().filter(r -> idSet.contains(r.getGroupId())).toList();
@@ -1582,159 +1609,302 @@ public class DemandServiceImpl implements DemandService {
 		Map<Long, List<GroupFlowDto>> byGroup = allRows.stream()
 				.collect(Collectors.groupingBy(GroupFlowDto::getGroupId, LinkedHashMap::new, Collectors.toList()));
 
-		try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+		Map<Long, String> skillNameMap = skillRepo.findAll().stream()
+				.collect(Collectors.toMap(Skill::getSkillId, Skill::getSkillName, (s1, s2) -> s1));
 
-			// ── Styles ──
-			CellStyle headerStyle = workbook.createCellStyle();
-			Font headerFont = workbook.createFont();
-			headerFont.setBold(true);
-			headerFont.setColor(IndexedColors.WHITE.getIndex());
-			headerFont.setFontHeightInPoints((short) 11);
-			headerStyle.setFont(headerFont);
-			headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
-			headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			headerStyle.setAlignment(HorizontalAlignment.CENTER);
-			headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
-			headerStyle.setBorderBottom(BorderStyle.THIN);
-			headerStyle.setBorderTop(BorderStyle.THIN);
-			headerStyle.setBorderLeft(BorderStyle.THIN);
-			headerStyle.setBorderRight(BorderStyle.THIN);
-			headerStyle.setWrapText(true);
+		Set<Long> demandIdSet = byGroup.keySet();
+		Map<Long, List<Long>> demandSkillIds = demandRepo.findAllById(demandIdSet).stream()
+				.collect(Collectors.toMap(Demand::getDemandid,
+						d -> d.getSkillIds() != null ? d.getSkillIds() : List.of(), (l1, l2) -> l1));
 
-			CellStyle cellStyle = workbook.createCellStyle();
-			Font cellFont = workbook.createFont();
-			cellFont.setFontHeightInPoints((short) 10);
-			cellStyle.setFont(cellFont);
-			cellStyle.setWrapText(true);
-			cellStyle.setVerticalAlignment(VerticalAlignment.TOP);
+		// ── Build flat master rows ──
+		List<MasterDataRow> masterRows = new ArrayList<>();
+		for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+			Long demandId = ge.getKey();
+			List<GroupFlowDto> groupRows = ge.getValue();
+			if (groupRows.isEmpty()) continue;
+
+			List<Long> skillIds = demandSkillIds.getOrDefault(demandId, List.of());
+			String skillsStr = skillIds.stream()
+					.map(id -> skillNameMap.getOrDefault(id, "Skill#" + id))
+					.collect(Collectors.joining(", "));
+			if (skillsStr.isBlank()) skillsStr = "-";
+
+			Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
+					.filter(r -> r.getInterviewId() != null)
+					.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId,
+							LinkedHashMap::new, Collectors.toList()));
+
+			for (List<GroupFlowDto> ivRows : byInterview.values()) {
+				GroupFlowDto iv0 = ivRows.get(0);
+				MasterDataRow mRow = new MasterDataRow();
+				mRow.setClient(nvl(iv0.getAccountName(), nvl(iv0.getCompanyName(), "-")));
+				mRow.setSkill(skillsStr);
+				mRow.setCandidateName(nvl(iv0.getCandidateName(), "-"));
+				mRow.setStatus(determineCandidateStatus(ivRows));
+				mRow.setContactNo(nvl(iv0.getCandidatePhoneNumber(), "-"));
+				mRow.setEmail(nvl(iv0.getCandidateEmail(), "-"));
+				mRow.setProject(nvl(iv0.getProjectName(), "-"));
+				mRow.setDemandId("DEM-" + iv0.getGroupId());
+				masterRows.add(mRow);
+			}
+		}
+
+		try (XSSFWorkbook workbook = new XSSFWorkbook();
+			 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+
+			// ─── Common styles ───────────────────────────────────────
+			Font boldFont = workbook.createFont();
+			boldFont.setBold(true);
+			boldFont.setFontHeightInPoints((short) 10);
+
+			Font plainFont = workbook.createFont();
+			plainFont.setFontHeightInPoints((short) 10);
+
+			XSSFCellStyle hdrStyle = workbook.createCellStyle();
+			Font hdrFont = workbook.createFont();
+			hdrFont.setBold(true);
+			hdrFont.setColor(IndexedColors.WHITE.getIndex());
+			hdrFont.setFontHeightInPoints((short) 10);
+			hdrStyle.setFont(hdrFont);
+			hdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 73, 125), null));
+			hdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			hdrStyle.setBorderBottom(BorderStyle.THIN);
+			hdrStyle.setBorderTop(BorderStyle.THIN);
+			hdrStyle.setBorderLeft(BorderStyle.THIN);
+			hdrStyle.setBorderRight(BorderStyle.THIN);
+			hdrStyle.setAlignment(HorizontalAlignment.LEFT);
+
+			XSSFCellStyle cellStyle = workbook.createCellStyle();
+			cellStyle.setFont(plainFont);
 			cellStyle.setBorderBottom(BorderStyle.THIN);
 			cellStyle.setBorderTop(BorderStyle.THIN);
 			cellStyle.setBorderLeft(BorderStyle.THIN);
 			cellStyle.setBorderRight(BorderStyle.THIN);
-			cellStyle.setAlignment(HorizontalAlignment.LEFT);
+			cellStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
-			CellStyle centerStyle = workbook.createCellStyle();
-			centerStyle.cloneStyleFrom(cellStyle);
-			centerStyle.setAlignment(HorizontalAlignment.CENTER);
+			// ─────────────────────────────────────────────────────────
+			// SHEET 0 — MasterData (pivot data source)
+			// Columns: A=Client, B=Skill, C=Candidate Name, D=Status,
+			//          E=Contact No, F=Email, G=Project, H=Demand ID
+			// ─────────────────────────────────────────────────────────
+			XSSFSheet masterSheet = workbook.createSheet("MasterData");
+			masterSheet.setDisplayGridlines(true);
 
-			CellStyle internalStyle = workbook.createCellStyle();
-			internalStyle.cloneStyleFrom(cellStyle);
-			internalStyle.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
-			internalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-			CellStyle externalStyle = workbook.createCellStyle();
-			externalStyle.cloneStyleFrom(cellStyle);
-			externalStyle.setFillForegroundColor(IndexedColors.LAVENDER.getIndex());
-			externalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-			// ── Pre-load skills map ──
-			Map<Long, String> skillNameMap = skillRepo.findAll().stream()
-					.collect(Collectors.toMap(Skill::getSkillId, Skill::getSkillName));
-
-			// ── Pre-load demand skill_ids from demand entities ──
-			Set<Long> demandIdSet = byGroup.keySet();
-			Map<Long, List<Long>> demandSkillIds = demandRepo.findAllById(demandIdSet).stream()
-					.collect(Collectors.toMap(Demand::getDemandid,
-							d -> d.getSkillIds() != null ? d.getSkillIds() : List.of()));
-
-			// ── Interview level funnel order ──
-			List<String> LEVELS = List.of("Screened", "L1", "L2", "L3", "HR Round", "Final Round", "Onboarding");
-
-			// ══════════════ SHEET 1: Demand Summary ══════════════
-			Sheet sheet0 = workbook.createSheet("Demand Summary");
-
-			// Header: fixed cols + per-level Appeared/Rejected + grand totals
-			List<String> h0 = new ArrayList<>(List.of(
-					"Demand ID", "Demand Title", "Client", "Project",
-					"Skills", "Priority", "Status", "Total Requested"));
-			for (String lv : LEVELS) {
-				h0.add(lv + "\nAppeared");
-				h0.add(lv + "\nRejected");
-			}
-			h0.addAll(List.of("Total Appeared", "Total Rejected", "Total Selected"));
-
-			Row hRow0 = sheet0.createRow(0);
-			hRow0.setHeightInPoints(36);
-			for (int i = 0; i < h0.size(); i++) {
-				setCellHelper(hRow0, i, h0.get(i), headerStyle);
+			String[] mHeaders = { "Client", "Skill", "Candidate Name", "Status", "Contact No", "Email", "Project", "Demand ID" };
+			Row rMHead = masterSheet.createRow(0);
+			rMHead.setHeightInPoints(22);
+			for (int i = 0; i < mHeaders.length; i++) {
+				Cell c = rMHead.createCell(i);
+				c.setCellValue(mHeaders[i]);
+				c.setCellStyle(hdrStyle);
 			}
 
-			int r0 = 1;
-			for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
-				Long demandId = ge.getKey();
-				List<GroupFlowDto> groupRows = ge.getValue();
-				GroupFlowDto g0 = groupRows.get(0);
-
-				// Skills string
-				List<Long> skillIds = demandSkillIds.getOrDefault(demandId, List.of());
-				String skillsStr = skillIds.stream()
-						.map(id -> skillNameMap.getOrDefault(id, "Skill#" + id))
-						.collect(Collectors.joining(", "));
-				if (skillsStr.isBlank()) skillsStr = "-";
-
-				// Group by interview (unique candidate session)
-				Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
-						.filter(r -> r.getInterviewId() != null)
-						.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId,
-								LinkedHashMap::new, Collectors.toList()));
-
-				// Per-level counters
-				Map<String, Integer> levelAppeared = new LinkedHashMap<>();
-				Map<String, Integer> levelRejected = new LinkedHashMap<>();
-				for (String lv : LEVELS) {
-					levelAppeared.put(lv, 0);
-					levelRejected.put(lv, 0);
+			int mRowIdx = 1;
+			for (MasterDataRow m : masterRows) {
+				Row r = masterSheet.createRow(mRowIdx++);
+				r.setHeightInPoints(18);
+				String[] vals = {
+						m.getClient(), m.getSkill(), m.getCandidateName(), m.getStatus(),
+						m.getContactNo(), m.getEmail(), m.getProject(), m.getDemandId()
+				};
+				for (int i = 0; i < vals.length; i++) {
+					Cell c = r.createCell(i);
+					c.setCellValue(vals[i] != null ? vals[i] : "-");
+					c.setCellStyle(cellStyle);
 				}
-				int totalSelected = 0;
-
-				for (List<GroupFlowDto> ivRows : byInterview.values()) {
-					for (GroupFlowDto lvRow : ivRows) {
-						String lvl = lvRow.getInterviewLevel();
-						if (lvl == null) continue;
-						String matchedLevel = LEVELS.stream()
-								.filter(l -> l.equalsIgnoreCase(lvl.trim()))
-								.findFirst().orElse(null);
-						if (matchedLevel == null) continue;
-						levelAppeared.merge(matchedLevel, 1, Integer::sum);
-						String status = lvRow.getInterviewLevelStatus();
-						if (status != null && (status.equalsIgnoreCase("Rejected")
-								|| status.equalsIgnoreCase("Failed")
-								|| status.equalsIgnoreCase("Not Selected"))) {
-							levelRejected.merge(matchedLevel, 1, Integer::sum);
-						}
-					}
-					if ("Selected".equalsIgnoreCase(ivRows.get(0).getInterviewOverallStatus())) {
-						totalSelected++;
-					}
-				}
-
-				int totalAppeared = levelAppeared.values().stream().mapToInt(Integer::intValue).sum();
-				int totalRejected = levelRejected.values().stream().mapToInt(Integer::intValue).sum();
-
-				Row row = sheet0.createRow(r0++);
-				int c = 0;
-				setCellHelper(row, c++, "DEM-" + g0.getGroupId(), cellStyle);
-				setCellHelper(row, c++, nvl(g0.getGroupTitle(), "-"), cellStyle);
-				setCellHelper(row, c++, nvl(g0.getAccountName(), "-"), cellStyle);
-				setCellHelper(row, c++, nvl(g0.getProjectName(), "-"), cellStyle);
-				setCellHelper(row, c++, skillsStr, cellStyle);
-				setCellHelper(row, c++, nvl(g0.getPriority(), "-"), centerStyle);
-				setCellHelper(row, c++, nvl(g0.getGroupStatus(), "-"), centerStyle);
-				setCellHelper(row, c++, String.valueOf(nvl(g0.getGroupTotalRequested(), 0)), centerStyle);
-				for (String lv : LEVELS) {
-					setCellHelper(row, c++, String.valueOf(levelAppeared.getOrDefault(lv, 0)), centerStyle);
-					setCellHelper(row, c++, String.valueOf(levelRejected.getOrDefault(lv, 0)), centerStyle);
-				}
-				setCellHelper(row, c++, String.valueOf(totalAppeared), centerStyle);
-				setCellHelper(row, c++, String.valueOf(totalRejected), centerStyle);
-				setCellHelper(row, c++, String.valueOf(totalSelected), centerStyle);
 			}
-			sheet0.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h0.size() - 1));
-			autoSizeColumnsHelper(sheet0, h0.size());
+			for (int i = 0; i < mHeaders.length; i++) {
+				masterSheet.autoSizeColumn(i);
+				if (masterSheet.getColumnWidth(i) > 12000) masterSheet.setColumnWidth(i, 12000);
+				if (masterSheet.getColumnWidth(i) < 3000)  masterSheet.setColumnWidth(i, 3000);
+			}
+
+			// ─────────────────────────────────────────────────────────
+			// SHEET 1 — Pivot  (XSSFPivotTable + chart)
+			// ─────────────────────────────────────────────────────────
+			XSSFSheet pivotSheet = workbook.createSheet("Pivot");
+			pivotSheet.setDisplayGridlines(false);
+
+			// Source data range on MasterData (row 0 = header, rows 1..N = data)
+			int lastDataRow = masterRows.size(); // 0-based last row index in MasterData
+			AreaReference sourceRef;
+			if (lastDataRow < 1) {
+				// No data – still create a 1-row pivot so the file is valid
+				sourceRef = new AreaReference(
+						new CellReference(0, 0), new CellReference(1, mHeaders.length - 1),
+						SpreadsheetVersion.EXCEL2007);
+			} else {
+				sourceRef = new AreaReference(
+						new CellReference(0, 0), new CellReference(lastDataRow, mHeaders.length - 1),
+						SpreadsheetVersion.EXCEL2007);
+			}
+
+			// Place the pivot table at cell B2 on the Pivot sheet
+			CellReference pivotTopLeft = new CellReference("B2");
+			XSSFPivotTable pivotTable = pivotSheet.createPivotTable(sourceRef, pivotTopLeft, masterSheet);
+
+			// Row Labels: Skill (col 1), Status (col 3)
+			pivotTable.addRowLabel(1);  // Skill column
+			pivotTable.addRowLabel(3);  // Status column
+
+			// Values: COUNT of Status
+			pivotTable.addColumnLabel(DataConsolidateFunction.COUNT, 3, "Count of Status");
+
+			// Report Filter: Client (col 0)
+			pivotTable.addReportFilter(0);
+
+			// ── Chart helper data: Skill totals in cols N & O (indices 13,14)
+			// Aggregate skill totals for the chart
+			Map<String, Integer> skillTotals = new TreeMap<>();
+			for (MasterDataRow m : masterRows) {
+				skillTotals.merge(m.getSkill(), 1, Integer::sum);
+			}
+
+			int numSkills = skillTotals.size();
+			if (numSkills > 0) {
+				// Write helper header row at row 0 (cols N & O)
+				Row r0 = pivotSheet.getRow(0);
+				if (r0 == null) r0 = pivotSheet.createRow(0);
+				r0.createCell(13).setCellValue("Skill");
+				r0.createCell(14).setCellValue("Total");
+
+				int chartDataRow = 1;
+				for (Map.Entry<String, Integer> entry : skillTotals.entrySet()) {
+					Row r = pivotSheet.getRow(chartDataRow);
+					if (r == null) r = pivotSheet.createRow(chartDataRow);
+					r.createCell(13).setCellValue(entry.getKey());
+					r.createCell(14).setCellValue(entry.getValue());
+					chartDataRow++;
+				}
+
+				// ── Clustered column chart anchored at col R, row 1 ──
+				XSSFDrawing drawing = pivotSheet.createDrawingPatriarch();
+				// Anchor: col 17 (R), row 1 → col 27 (AB), row 22
+				XSSFClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 17, 1, 27, 22);
+				XSSFChart chart = drawing.createChart(anchor);
+				chart.setTitleText("Total Candidates by Skill");
+				chart.setTitleOverlay(false);
+
+				XDDFCategoryAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
+				catAxis.setTitle("Skill");
+				XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
+				valAxis.setTitle("Count");
+
+				XDDFDataSource<String> cats = XDDFDataSourcesFactory.fromStringCellRange(
+						pivotSheet, new CellRangeAddress(1, numSkills, 13, 13));
+				XDDFNumericalDataSource<Double> vals = XDDFDataSourcesFactory.fromNumericCellRange(
+						pivotSheet, new CellRangeAddress(1, numSkills, 14, 14));
+
+				XDDFChartData barData = chart.createData(ChartTypes.BAR, catAxis, valAxis);
+				XDDFChartData.Series series = barData.addSeries(cats, vals);
+				series.setTitle("Candidates", null);
+				if (barData instanceof XDDFBarChartData) {
+					((XDDFBarChartData) barData).setBarDirection(BarDirection.COL);
+				}
+				chart.plot(barData);
+			}
+
+			// Hide the helper columns (N & O) from view
+			pivotSheet.setColumnHidden(13, true);
+			pivotSheet.setColumnHidden(14, true);
+
+			// Set Pivot sheet as active (it is sheet index 1)
+			workbook.setActiveSheet(1);
+			workbook.setSelectedTab(1);
 
 			workbook.write(out);
 			return out.toByteArray();
 		}
+	}
+
+	private static class MasterDataRow {
+		private String client;
+		private String skill;
+		private String candidateName;
+		private String status;
+		private String contactNo;
+		private String email;
+		private String project;
+		private String demandId;
+
+		public String getClient() { return client; }
+		public void setClient(String client) { this.client = client; }
+		public String getSkill() { return skill; }
+		public void setSkill(String skill) { this.skill = skill; }
+		public String getCandidateName() { return candidateName; }
+		public void setCandidateName(String candidateName) { this.candidateName = candidateName; }
+		public String getStatus() { return status; }
+		public void setStatus(String status) { this.status = status; }
+		public String getContactNo() { return contactNo; }
+		public void setContactNo(String contactNo) { this.contactNo = contactNo; }
+		public String getEmail() { return email; }
+		public void setEmail(String email) { this.email = email; }
+		public String getProject() { return project; }
+		public void setProject(String project) { this.project = project; }
+		public String getDemandId() { return demandId; }
+		public void setDemandId(String demandId) { this.demandId = demandId; }
+	}
+
+	public static String determineCandidateStatus(List<GroupFlowDto> rows) {
+		if (rows == null || rows.isEmpty()) {
+			return "Pending";
+		}
+		GroupFlowDto first = rows.get(0);
+		String overallStatus = first.getInterviewOverallStatus();
+
+		String resumeStatus = first.getCandidateResumeStatus();
+		if (resumeStatus != null && (resumeStatus.equalsIgnoreCase("Drop") || resumeStatus.equalsIgnoreCase("Duplicate"))) {
+			return capitalize(resumeStatus);
+		}
+
+		GroupFlowDto latestLvlRow = null;
+		for (GroupFlowDto row : rows) {
+			if (row.getInterviewLevel() != null && !row.getInterviewLevel().isBlank()) {
+				if (latestLvlRow == null) {
+					latestLvlRow = row;
+				} else {
+					if (row.getInterviewCompletedAt() != null) {
+						if (latestLvlRow.getInterviewCompletedAt() == null || row.getInterviewCompletedAt().isAfter(latestLvlRow.getInterviewCompletedAt())) {
+							latestLvlRow = row;
+						}
+					} else if (latestLvlRow.getInterviewCompletedAt() == null) {
+						if (row.getInterviewLevelStatus() != null && latestLvlRow.getInterviewLevelStatus() == null) {
+							latestLvlRow = row;
+						}
+					}
+				}
+			}
+		}
+
+		if (latestLvlRow != null) {
+			String lvl = latestLvlRow.getInterviewLevel();
+			String status = latestLvlRow.getInterviewLevelStatus();
+			if (status == null || status.isBlank()) {
+				status = "Pending";
+			}
+
+			lvl = capitalize(lvl);
+			status = capitalize(status);
+
+			if (status.equalsIgnoreCase("Drop") || status.equalsIgnoreCase("Duplicate")) {
+				return status;
+			}
+			return lvl + " " + status;
+		}
+
+		if (overallStatus != null && !overallStatus.isBlank()) {
+			return capitalize(overallStatus);
+		}
+
+		return "Pending";
+	}
+
+	private static String capitalize(String s) {
+		if (s == null || s.isBlank()) return "";
+		s = s.trim();
+		if (s.length() == 1) return s.toUpperCase();
+		return s.substring(0, 1).toUpperCase() + s.substring(1);
 	}
 
 	private void setCellHelper(Row row, int col, String value, CellStyle style) {

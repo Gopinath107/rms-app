@@ -1613,6 +1613,10 @@ public class DemandServiceImpl implements DemandService {
 			cellStyle.setBorderRight(BorderStyle.THIN);
 			cellStyle.setAlignment(HorizontalAlignment.LEFT);
 
+			CellStyle centerStyle = workbook.createCellStyle();
+			centerStyle.cloneStyleFrom(cellStyle);
+			centerStyle.setAlignment(HorizontalAlignment.CENTER);
+
 			CellStyle internalStyle = workbook.createCellStyle();
 			internalStyle.cloneStyleFrom(cellStyle);
 			internalStyle.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
@@ -1623,7 +1627,112 @@ public class DemandServiceImpl implements DemandService {
 			externalStyle.setFillForegroundColor(IndexedColors.LAVENDER.getIndex());
 			externalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
 
-			// ══════════════ SHEET 1: Resource Comparison ══════════════
+			// ── Pre-load skills map ──
+			Map<Long, String> skillNameMap = skillRepo.findAll().stream()
+					.collect(Collectors.toMap(Skill::getSkillId, Skill::getSkillName));
+
+			// ── Pre-load demand skill_ids from demand entities ──
+			Set<Long> demandIdSet = byGroup.keySet();
+			Map<Long, List<Long>> demandSkillIds = demandRepo.findAllById(demandIdSet).stream()
+					.collect(Collectors.toMap(Demand::getDemandid,
+							d -> d.getSkillIds() != null ? d.getSkillIds() : List.of()));
+
+			// ── Interview level funnel order ──
+			List<String> LEVELS = List.of("Screened", "L1", "L2", "L3", "HR Round", "Final Round", "Onboarding");
+
+			// ══════════════ SHEET 1: Demand Summary ══════════════
+			Sheet sheet0 = workbook.createSheet("Demand Summary");
+
+			// Header: fixed cols + per-level Appeared/Rejected + grand totals
+			List<String> h0 = new ArrayList<>(List.of(
+					"Demand ID", "Demand Title", "Client", "Project",
+					"Skills", "Priority", "Status", "Total Requested"));
+			for (String lv : LEVELS) {
+				h0.add(lv + "\nAppeared");
+				h0.add(lv + "\nRejected");
+			}
+			h0.addAll(List.of("Total Appeared", "Total Rejected", "Total Selected"));
+
+			Row hRow0 = sheet0.createRow(0);
+			hRow0.setHeightInPoints(36);
+			for (int i = 0; i < h0.size(); i++) {
+				setCellHelper(hRow0, i, h0.get(i), headerStyle);
+			}
+
+			int r0 = 1;
+			for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
+				Long demandId = ge.getKey();
+				List<GroupFlowDto> groupRows = ge.getValue();
+				GroupFlowDto g0 = groupRows.get(0);
+
+				// Skills string
+				List<Long> skillIds = demandSkillIds.getOrDefault(demandId, List.of());
+				String skillsStr = skillIds.stream()
+						.map(id -> skillNameMap.getOrDefault(id, "Skill#" + id))
+						.collect(Collectors.joining(", "));
+				if (skillsStr.isBlank()) skillsStr = "-";
+
+				// Group by interview (unique candidate session)
+				Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
+						.filter(r -> r.getInterviewId() != null)
+						.collect(Collectors.groupingBy(GroupFlowDto::getInterviewId,
+								LinkedHashMap::new, Collectors.toList()));
+
+				// Per-level counters
+				Map<String, Integer> levelAppeared = new LinkedHashMap<>();
+				Map<String, Integer> levelRejected = new LinkedHashMap<>();
+				for (String lv : LEVELS) {
+					levelAppeared.put(lv, 0);
+					levelRejected.put(lv, 0);
+				}
+				int totalSelected = 0;
+
+				for (List<GroupFlowDto> ivRows : byInterview.values()) {
+					for (GroupFlowDto lvRow : ivRows) {
+						String lvl = lvRow.getInterviewLevel();
+						if (lvl == null) continue;
+						String matchedLevel = LEVELS.stream()
+								.filter(l -> l.equalsIgnoreCase(lvl.trim()))
+								.findFirst().orElse(null);
+						if (matchedLevel == null) continue;
+						levelAppeared.merge(matchedLevel, 1, Integer::sum);
+						String status = lvRow.getInterviewLevelStatus();
+						if (status != null && (status.equalsIgnoreCase("Rejected")
+								|| status.equalsIgnoreCase("Failed")
+								|| status.equalsIgnoreCase("Not Selected"))) {
+							levelRejected.merge(matchedLevel, 1, Integer::sum);
+						}
+					}
+					if ("Selected".equalsIgnoreCase(ivRows.get(0).getInterviewOverallStatus())) {
+						totalSelected++;
+					}
+				}
+
+				int totalAppeared = levelAppeared.values().stream().mapToInt(Integer::intValue).sum();
+				int totalRejected = levelRejected.values().stream().mapToInt(Integer::intValue).sum();
+
+				Row row = sheet0.createRow(r0++);
+				int c = 0;
+				setCellHelper(row, c++, "DEM-" + g0.getGroupId(), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getGroupTitle(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getAccountName(), "-"), cellStyle);
+				setCellHelper(row, c++, nvl(g0.getProjectName(), "-"), cellStyle);
+				setCellHelper(row, c++, skillsStr, cellStyle);
+				setCellHelper(row, c++, nvl(g0.getPriority(), "-"), centerStyle);
+				setCellHelper(row, c++, nvl(g0.getGroupStatus(), "-"), centerStyle);
+				setCellHelper(row, c++, String.valueOf(nvl(g0.getGroupTotalRequested(), 0)), centerStyle);
+				for (String lv : LEVELS) {
+					setCellHelper(row, c++, String.valueOf(levelAppeared.getOrDefault(lv, 0)), centerStyle);
+					setCellHelper(row, c++, String.valueOf(levelRejected.getOrDefault(lv, 0)), centerStyle);
+				}
+				setCellHelper(row, c++, String.valueOf(totalAppeared), centerStyle);
+				setCellHelper(row, c++, String.valueOf(totalRejected), centerStyle);
+				setCellHelper(row, c++, String.valueOf(totalSelected), centerStyle);
+			}
+			sheet0.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h0.size() - 1));
+			autoSizeColumnsHelper(sheet0, h0.size());
+
+			// ══════════════ SHEET 2: Resource Comparison ══════════════
 			Sheet sheet1 = workbook.createSheet("Resource Comparison");
 			String[] h1 = { "Demand ID", "Demand Title", "Account", "Project", "Resource Name",
 					"Resource Type", "Resource ID", "Email", "Phone", "Experience (Yrs)",
@@ -1677,7 +1786,7 @@ public class DemandServiceImpl implements DemandService {
 			sheet1.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h1.length - 1));
 			autoSizeColumnsHelper(sheet1, h1.length);
 
-			// ══════════════ SHEET 2: Interview Details ══════════════
+			// ══════════════ SHEET 3: Interview Details ══════════════
 			Sheet sheet2 = workbook.createSheet("Interview Details");
 			String[] h2 = { "Demand ID", "Demand Title", "Resource Name", "Resource Type",
 					"Interview Level", "Level Status", "Interviewer", "Completed Date", "Notes / Feedback" };
@@ -1721,7 +1830,7 @@ public class DemandServiceImpl implements DemandService {
 			sheet2.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, h2.length - 1));
 			autoSizeColumnsHelper(sheet2, h2.length);
 
-			// ══════════════ SHEET 3: Summary Statistics ══════════════
+			// ══════════════ SHEET 4: Summary Statistics ══════════════
 			Sheet sheet3 = workbook.createSheet("Summary Statistics");
 			String[] h3 = { "Demand ID", "Demand Title", "Account", "Project", "Status", "Priority",
 					"Total Resources", "Internal", "External", "Scheduled", "Selected",

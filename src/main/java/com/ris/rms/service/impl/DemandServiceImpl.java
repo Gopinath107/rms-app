@@ -1691,6 +1691,16 @@ public class DemandServiceImpl implements DemandService {
 			centerStyle.cloneStyleFrom(cellStyle);
 			centerStyle.setAlignment(HorizontalAlignment.CENTER);
 
+			// Alternate-row style (light grey stripe)
+			XSSFCellStyle altRowStyle = workbook.createCellStyle();
+			altRowStyle.cloneStyleFrom(cellStyle);
+			altRowStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(242, 242, 242), null));
+			altRowStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+			XSSFCellStyle altCenterStyle = workbook.createCellStyle();
+			altCenterStyle.cloneStyleFrom(altRowStyle);
+			altCenterStyle.setAlignment(HorizontalAlignment.CENTER);
+
 			XSSFCellStyle subtotalStyle = workbook.createCellStyle();
 			subtotalStyle.cloneStyleFrom(cellStyle);
 			subtotalStyle.setFont(boldFont);
@@ -1713,18 +1723,29 @@ public class DemandServiceImpl implements DemandService {
 			grandTotalCenterStyle.cloneStyleFrom(grandTotalStyle);
 			grandTotalCenterStyle.setAlignment(HorizontalAlignment.CENTER);
 
-			// ── SHEET 0: Pivot Summary (active, opens first) ──────────
-			XSSFSheet pivotSheet = workbook.createSheet("Pivot Summary");
-			pivotSheet.setDisplayGridlines(true);
-			pivotSheet.setColumnWidth(0, 8000);
-			pivotSheet.setColumnWidth(1, 6000);
-			pivotSheet.setColumnWidth(2, 4000);
+			// ── SHEET 0: Demand Summary (active, opens first) ─────────
+			// Layout: one row per demand
+			// Columns: Demand ID | Client | Skill(s) | L1 Rejected | L2 Rejected |
+			//          L3 Rejected | HR Round Rejected | Final Round Rejected |
+			//          Total Rejected | Total Candidates
+			// ──────────────────────────────────────────────────────────
+			final String[] LEVEL_COLS = {"L1", "L2", "L3", "HR Round", "Final Round"};
+			// total columns = 3 (Demand ID, Client, Skill) + levels + 2 (Total Rejected, Total Candidates)
+			int totalCols = 3 + LEVEL_COLS.length + 2;
 
-			// Title row
+			XSSFSheet pivotSheet = workbook.createSheet("Demand Summary");
+			pivotSheet.setDisplayGridlines(true);
+			// Column widths
+			pivotSheet.setColumnWidth(0, 4000);  // Demand ID
+			pivotSheet.setColumnWidth(1, 5000);  // Client
+			pivotSheet.setColumnWidth(2, 8000);  // Skill(s)
+			for (int i = 3; i < totalCols; i++) pivotSheet.setColumnWidth(i, 3800);
+
+			// ── Title row ──
 			Row rTitle = pivotSheet.createRow(0);
-			rTitle.setHeightInPoints(28);
+			rTitle.setHeightInPoints(30);
 			Cell cTitle = rTitle.createCell(0);
-			cTitle.setCellValue("Demand Resource Summary");
+			cTitle.setCellValue("Demand-wise Candidate Summary");
 			XSSFFont titleFont = workbook.createFont();
 			titleFont.setBold(true);
 			titleFont.setFontHeightInPoints((short) 14);
@@ -1733,13 +1754,13 @@ public class DemandServiceImpl implements DemandService {
 			titleStyle.setFont(titleFont);
 			titleStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 			cTitle.setCellStyle(titleStyle);
-			pivotSheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 2));
+			pivotSheet.addMergedRegion(new CellRangeAddress(0, 0, 0, totalCols - 1));
 
-			// Subtitle row
+			// ── Subtitle row ──
 			Row rSub = pivotSheet.createRow(1);
 			rSub.setHeightInPoints(16);
 			Cell cSub = rSub.createCell(0);
-			cSub.setCellValue("Skill x Candidate Status breakdown  |  Raw data on MasterData sheet");
+			cSub.setCellValue("Per demand: skills, interview-level rejected counts and total candidates  |  Raw data on MasterData sheet");
 			XSSFCellStyle subStyle = workbook.createCellStyle();
 			XSSFFont subFont = workbook.createFont();
 			subFont.setItalic(true);
@@ -1747,100 +1768,96 @@ public class DemandServiceImpl implements DemandService {
 			subFont.setColor(new XSSFColor(new java.awt.Color(128, 128, 128), null));
 			subStyle.setFont(subFont);
 			cSub.setCellStyle(subStyle);
-			pivotSheet.addMergedRegion(new CellRangeAddress(1, 1, 0, 2));
+			pivotSheet.addMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
 
 			// Spacer
 			pivotSheet.createRow(2).setHeightInPoints(6);
 
-			// Column headers
+			// ── Column header row ──
 			Row rHead = pivotSheet.createRow(3);
-			rHead.setHeightInPoints(24);
-			setCellHelper(rHead, 0, "Skill",           pivotHdrStyle);
-			setCellHelper(rHead, 1, "Status",          pivotHdrStyle);
-			setCellHelper(rHead, 2, "Count of Status", pivotHdrStyle);
+			rHead.setHeightInPoints(26);
+			setCellHelper(rHead, 0, "Demand ID",       pivotHdrStyle);
+			setCellHelper(rHead, 1, "Client",          pivotHdrStyle);
+			setCellHelper(rHead, 2, "Skill(s)",        pivotHdrStyle);
+			for (int i = 0; i < LEVEL_COLS.length; i++) {
+				setCellHelper(rHead, 3 + i, LEVEL_COLS[i] + " Rejected", pivotHdrStyle);
+			}
+			setCellHelper(rHead, 3 + LEVEL_COLS.length,     "Total Rejected",    pivotHdrStyle);
+			setCellHelper(rHead, 3 + LEVEL_COLS.length + 1, "Total Candidates",  pivotHdrStyle);
 
-			// Aggregate pivot data
-			Map<String, Map<String, Integer>> skillStatusMap = new TreeMap<>();
-			Map<String, Integer> skillTotals = new TreeMap<>();
-			int grandTotal = 0;
+			// ── Aggregate: group masterRows by Demand ID ──
+			Map<String, List<MasterDataRow>> rowsByDemand = new LinkedHashMap<>();
 			for (MasterDataRow m : masterRows) {
-				skillStatusMap.computeIfAbsent(m.getSkill(), k -> new TreeMap<>())
-						.merge(m.getStatus(), 1, Integer::sum);
-				skillTotals.merge(m.getSkill(), 1, Integer::sum);
-				grandTotal++;
+				rowsByDemand.computeIfAbsent(m.getDemandId(), k -> new ArrayList<>()).add(m);
 			}
 
-			// Write pivot rows
+			// ── Write one data row per demand ──
 			int pivRowIdx = 4;
-			for (Map.Entry<String, Map<String, Integer>> skillEntry : skillStatusMap.entrySet()) {
-				String skill = skillEntry.getKey();
-				boolean firstStatus = true;
-				for (Map.Entry<String, Integer> statusEntry : skillEntry.getValue().entrySet()) {
-					Row row = pivotSheet.createRow(pivRowIdx++);
-					row.setHeightInPoints(18);
-					setCellHelper(row, 0, firstStatus ? skill : "", cellStyle);
-					setCellHelper(row, 1, statusEntry.getKey(), cellStyle);
-					Cell cCount = row.createCell(2);
-					cCount.setCellValue(statusEntry.getValue());
-					cCount.setCellStyle(centerStyle);
-					firstStatus = false;
+			int grandCandidates = 0;
+			int grandRejected   = 0;
+
+			for (Map.Entry<String, List<MasterDataRow>> demEntry : rowsByDemand.entrySet()) {
+				String demandId   = demEntry.getKey();
+				List<MasterDataRow> demRows = demEntry.getValue();
+				MasterDataRow first = demRows.get(0);
+
+				int totalCandidates = demRows.size();
+				grandCandidates += totalCandidates;
+
+				// Count rejected per level
+				Map<String, Integer> rejByLevel = new LinkedHashMap<>();
+				for (String lv : LEVEL_COLS) rejByLevel.put(lv, 0);
+				int totalRejected = 0;
+
+				for (MasterDataRow m : demRows) {
+					String lvl = extractLevelFromStatus(m.getStatus());
+					if (lvl != null && isRejectedStatus(m.getStatus())) {
+						rejByLevel.merge(lvl, 1, Integer::sum);
+						totalRejected++;
+					}
 				}
-				// Subtotal row
-				Row rST = pivotSheet.createRow(pivRowIdx++);
-				rST.setHeightInPoints(20);
-				setCellHelper(rST, 0, skill + " Total", subtotalStyle);
-				setCellHelper(rST, 1, "", subtotalStyle);
-				Cell cST = rST.createCell(2);
-				cST.setCellValue(skillTotals.get(skill));
-				cST.setCellStyle(subtotalCenterStyle);
+				grandRejected += totalRejected;
+
+				// Alternate row shading
+				XSSFCellStyle rowCellStyle   = (pivRowIdx % 2 == 0) ? cellStyle : altRowStyle;
+				XSSFCellStyle rowCenterStyle = (pivRowIdx % 2 == 0) ? centerStyle : altCenterStyle;
+
+				Row row = pivotSheet.createRow(pivRowIdx++);
+				row.setHeightInPoints(20);
+				setCellHelper(row, 0, demandId,           rowCellStyle);
+				setCellHelper(row, 1, first.getClient(),  rowCellStyle);
+				setCellHelper(row, 2, first.getSkill(),   rowCellStyle);
+				for (int i = 0; i < LEVEL_COLS.length; i++) {
+					Cell c = row.createCell(3 + i);
+					c.setCellValue(rejByLevel.getOrDefault(LEVEL_COLS[i], 0));
+					c.setCellStyle(rowCenterStyle);
+				}
+				Cell cTR = row.createCell(3 + LEVEL_COLS.length);
+				cTR.setCellValue(totalRejected);
+				cTR.setCellStyle(rowCenterStyle);
+				Cell cTC = row.createCell(3 + LEVEL_COLS.length + 1);
+				cTC.setCellValue(totalCandidates);
+				cTC.setCellStyle(rowCenterStyle);
 			}
-			// Grand total row
+
+			// ── Grand Total row ──
 			Row rGT = pivotSheet.createRow(pivRowIdx);
 			rGT.setHeightInPoints(22);
 			setCellHelper(rGT, 0, "Grand Total", grandTotalStyle);
-			setCellHelper(rGT, 1, "", grandTotalStyle);
-			Cell cGT = rGT.createCell(2);
-			cGT.setCellValue(grandTotal);
-			cGT.setCellStyle(grandTotalCenterStyle);
-
-			// Chart helper data in hidden cols E & F
-			int numSkills = skillTotals.size();
-			if (numSkills > 0) {
-				setCellHelper(rHead, 4, "Skill",  pivotHdrStyle);
-				setCellHelper(rHead, 5, "Total",  pivotHdrStyle);
-				int cdr = 4;
-				for (Map.Entry<String, Integer> e : skillTotals.entrySet()) {
-					Row r = pivotSheet.getRow(cdr);
-					if (r == null) r = pivotSheet.createRow(cdr);
-					setCellHelper(r, 4, e.getKey(), cellStyle);
-					Cell cv = r.createCell(5);
-					cv.setCellValue(e.getValue());
-					cv.setCellStyle(centerStyle);
-					cdr++;
-				}
-				XSSFDrawing drawing = pivotSheet.createDrawingPatriarch();
-				XSSFClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 6, 0, 15, 22);
-				XSSFChart chart = drawing.createChart(anchor);
-				chart.setTitleText("Candidates by Skill");
-				chart.setTitleOverlay(false);
-				XDDFCategoryAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
-				catAxis.setTitle("Skill");
-				XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
-				valAxis.setTitle("Count");
-				XDDFDataSource<String> cats = XDDFDataSourcesFactory.fromStringCellRange(
-						pivotSheet, new CellRangeAddress(4, 3 + numSkills, 4, 4));
-				XDDFNumericalDataSource<Double> chartVals = XDDFDataSourcesFactory.fromNumericCellRange(
-						pivotSheet, new CellRangeAddress(4, 3 + numSkills, 5, 5));
-				XDDFChartData barData = chart.createData(ChartTypes.BAR, catAxis, valAxis);
-				XDDFChartData.Series series = barData.addSeries(cats, chartVals);
-				series.setTitle("Candidates", null);
-				if (barData instanceof XDDFBarChartData) {
-					((XDDFBarChartData) barData).setBarDirection(BarDirection.COL);
-				}
-				chart.plot(barData);
-				pivotSheet.setColumnHidden(4, true);
-				pivotSheet.setColumnHidden(5, true);
+			setCellHelper(rGT, 1, "",            grandTotalStyle);
+			setCellHelper(rGT, 2, "",            grandTotalStyle);
+			for (int i = 0; i < LEVEL_COLS.length; i++) {
+				setCellHelper(rGT, 3 + i, "", grandTotalStyle);
 			}
+			Cell cGTRej = rGT.createCell(3 + LEVEL_COLS.length);
+			cGTRej.setCellValue(grandRejected);
+			cGTRej.setCellStyle(grandTotalCenterStyle);
+			Cell cGTTot = rGT.createCell(3 + LEVEL_COLS.length + 1);
+			cGTTot.setCellValue(grandCandidates);
+			cGTTot.setCellStyle(grandTotalCenterStyle);
+
+			// Auto-size all columns
+			autoSizeColumnsHelper(pivotSheet, totalCols);
 
 			// ── SHEET 1: MasterData (raw rows) ────────────────────────
 			XSSFSheet masterSheet = workbook.createSheet("MasterData");
@@ -1981,5 +1998,30 @@ public class DemandServiceImpl implements DemandService {
 			if (sheet.getColumnWidth(i) > 12000) sheet.setColumnWidth(i, 12000);
 			if (sheet.getColumnWidth(i) < 3000) sheet.setColumnWidth(i, 3000);
 		}
+	}
+
+	/**
+	 * Extracts the interview level prefix from a candidate status string.
+	 * E.g. "L1 Selected" → "L1", "HR Round Scheduled" → "HR Round", "Pending" → null
+	 */
+	private static String extractLevelFromStatus(String status) {
+		if (status == null || status.isBlank()) return null;
+		String upper = status.trim().toUpperCase();
+		if (upper.startsWith("L1"))    return "L1";
+		if (upper.startsWith("L2"))    return "L2";
+		if (upper.startsWith("L3"))    return "L3";
+		if (upper.startsWith("HR"))    return "HR Round";
+		if (upper.startsWith("FINAL")) return "Final Round";
+		return null;
+	}
+
+	/**
+	 * Returns true if the candidate's status indicates a rejection/drop at any level.
+	 * Matches "Rejected", "Drop", "Duplicate" (case-insensitive).
+	 */
+	private static boolean isRejectedStatus(String status) {
+		if (status == null) return false;
+		String upper = status.toUpperCase();
+		return upper.contains("REJECT") || upper.contains("DROP") || upper.contains("DUPLICATE");
 	}
 }

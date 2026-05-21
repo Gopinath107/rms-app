@@ -1653,41 +1653,196 @@ public class DemandServiceImpl implements DemandService {
 		try (XSSFWorkbook workbook = new XSSFWorkbook();
 			 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
-			// ─── Common styles ───────────────────────────────────────
 			Font boldFont = workbook.createFont();
 			boldFont.setBold(true);
 			boldFont.setFontHeightInPoints((short) 10);
-
 			Font plainFont = workbook.createFont();
 			plainFont.setFontHeightInPoints((short) 10);
+			Font whiteBoldFont = workbook.createFont();
+			whiteBoldFont.setBold(true);
+			whiteBoldFont.setColor(IndexedColors.WHITE.getIndex());
+			whiteBoldFont.setFontHeightInPoints((short) 10);
 
-			XSSFCellStyle hdrStyle = workbook.createCellStyle();
-			Font hdrFont = workbook.createFont();
-			hdrFont.setBold(true);
-			hdrFont.setColor(IndexedColors.WHITE.getIndex());
-			hdrFont.setFontHeightInPoints((short) 10);
-			hdrStyle.setFont(hdrFont);
-			hdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 73, 125), null));
-			hdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			hdrStyle.setBorderBottom(BorderStyle.THIN);
-			hdrStyle.setBorderTop(BorderStyle.THIN);
-			hdrStyle.setBorderLeft(BorderStyle.THIN);
-			hdrStyle.setBorderRight(BorderStyle.THIN);
-			hdrStyle.setAlignment(HorizontalAlignment.LEFT);
+			XSSFCellStyle navyHdrStyle = workbook.createCellStyle();
+			navyHdrStyle.setFont(whiteBoldFont);
+			navyHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 73, 125), null));
+			navyHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			navyHdrStyle.setBorderBottom(BorderStyle.THIN); navyHdrStyle.setBorderTop(BorderStyle.THIN);
+			navyHdrStyle.setBorderLeft(BorderStyle.THIN);  navyHdrStyle.setBorderRight(BorderStyle.THIN);
+			navyHdrStyle.setAlignment(HorizontalAlignment.LEFT);
+			navyHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+
+			XSSFCellStyle pivotHdrStyle = workbook.createCellStyle();
+			pivotHdrStyle.setFont(whiteBoldFont);
+			pivotHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(68, 84, 106), null));
+			pivotHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			pivotHdrStyle.setBorderBottom(BorderStyle.THIN); pivotHdrStyle.setBorderTop(BorderStyle.THIN);
+			pivotHdrStyle.setBorderLeft(BorderStyle.THIN);  pivotHdrStyle.setBorderRight(BorderStyle.THIN);
+			pivotHdrStyle.setAlignment(HorizontalAlignment.LEFT);
+			pivotHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle cellStyle = workbook.createCellStyle();
 			cellStyle.setFont(plainFont);
-			cellStyle.setBorderBottom(BorderStyle.THIN);
-			cellStyle.setBorderTop(BorderStyle.THIN);
-			cellStyle.setBorderLeft(BorderStyle.THIN);
-			cellStyle.setBorderRight(BorderStyle.THIN);
+			cellStyle.setBorderBottom(BorderStyle.THIN); cellStyle.setBorderTop(BorderStyle.THIN);
+			cellStyle.setBorderLeft(BorderStyle.THIN);  cellStyle.setBorderRight(BorderStyle.THIN);
 			cellStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
-			// ─────────────────────────────────────────────────────────
-			// SHEET 0 — MasterData (pivot data source)
-			// Columns: A=Client, B=Skill, C=Candidate Name, D=Status,
-			//          E=Contact No, F=Email, G=Project, H=Demand ID
-			// ─────────────────────────────────────────────────────────
+			XSSFCellStyle centerStyle = workbook.createCellStyle();
+			centerStyle.cloneStyleFrom(cellStyle);
+			centerStyle.setAlignment(HorizontalAlignment.CENTER);
+
+			XSSFCellStyle subtotalStyle = workbook.createCellStyle();
+			subtotalStyle.cloneStyleFrom(cellStyle);
+			subtotalStyle.setFont(boldFont);
+			subtotalStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(218, 234, 250), null));
+			subtotalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			subtotalStyle.setBorderBottom(BorderStyle.MEDIUM);
+
+			XSSFCellStyle subtotalCenterStyle = workbook.createCellStyle();
+			subtotalCenterStyle.cloneStyleFrom(subtotalStyle);
+			subtotalCenterStyle.setAlignment(HorizontalAlignment.CENTER);
+
+			XSSFCellStyle grandTotalStyle = workbook.createCellStyle();
+			grandTotalStyle.cloneStyleFrom(cellStyle);
+			grandTotalStyle.setFont(boldFont);
+			grandTotalStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(189, 215, 238), null));
+			grandTotalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			grandTotalStyle.setBorderBottom(BorderStyle.DOUBLE);
+
+			XSSFCellStyle grandTotalCenterStyle = workbook.createCellStyle();
+			grandTotalCenterStyle.cloneStyleFrom(grandTotalStyle);
+			grandTotalCenterStyle.setAlignment(HorizontalAlignment.CENTER);
+
+			// ── SHEET 0: Pivot Summary (active, opens first) ──────────
+			XSSFSheet pivotSheet = workbook.createSheet("Pivot Summary");
+			pivotSheet.setDisplayGridlines(true);
+			pivotSheet.setColumnWidth(0, 8000);
+			pivotSheet.setColumnWidth(1, 6000);
+			pivotSheet.setColumnWidth(2, 4000);
+
+			// Title row
+			Row rTitle = pivotSheet.createRow(0);
+			rTitle.setHeightInPoints(28);
+			Cell cTitle = rTitle.createCell(0);
+			cTitle.setCellValue("Demand Resource Summary");
+			XSSFFont titleFont = workbook.createFont();
+			titleFont.setBold(true);
+			titleFont.setFontHeightInPoints((short) 14);
+			titleFont.setColor(new XSSFColor(new java.awt.Color(31, 73, 125), null));
+			XSSFCellStyle titleStyle = workbook.createCellStyle();
+			titleStyle.setFont(titleFont);
+			titleStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+			cTitle.setCellStyle(titleStyle);
+			pivotSheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 2));
+
+			// Subtitle row
+			Row rSub = pivotSheet.createRow(1);
+			rSub.setHeightInPoints(16);
+			Cell cSub = rSub.createCell(0);
+			cSub.setCellValue("Skill x Candidate Status breakdown  |  Raw data on MasterData sheet");
+			XSSFCellStyle subStyle = workbook.createCellStyle();
+			XSSFFont subFont = workbook.createFont();
+			subFont.setItalic(true);
+			subFont.setFontHeightInPoints((short) 9);
+			subFont.setColor(new XSSFColor(new java.awt.Color(128, 128, 128), null));
+			subStyle.setFont(subFont);
+			cSub.setCellStyle(subStyle);
+			pivotSheet.addMergedRegion(new CellRangeAddress(1, 1, 0, 2));
+
+			// Spacer
+			pivotSheet.createRow(2).setHeightInPoints(6);
+
+			// Column headers
+			Row rHead = pivotSheet.createRow(3);
+			rHead.setHeightInPoints(24);
+			setCellHelper(rHead, 0, "Skill",           pivotHdrStyle);
+			setCellHelper(rHead, 1, "Status",          pivotHdrStyle);
+			setCellHelper(rHead, 2, "Count of Status", pivotHdrStyle);
+
+			// Aggregate pivot data
+			Map<String, Map<String, Integer>> skillStatusMap = new TreeMap<>();
+			Map<String, Integer> skillTotals = new TreeMap<>();
+			int grandTotal = 0;
+			for (MasterDataRow m : masterRows) {
+				skillStatusMap.computeIfAbsent(m.getSkill(), k -> new TreeMap<>())
+						.merge(m.getStatus(), 1, Integer::sum);
+				skillTotals.merge(m.getSkill(), 1, Integer::sum);
+				grandTotal++;
+			}
+
+			// Write pivot rows
+			int pivRowIdx = 4;
+			for (Map.Entry<String, Map<String, Integer>> skillEntry : skillStatusMap.entrySet()) {
+				String skill = skillEntry.getKey();
+				boolean firstStatus = true;
+				for (Map.Entry<String, Integer> statusEntry : skillEntry.getValue().entrySet()) {
+					Row row = pivotSheet.createRow(pivRowIdx++);
+					row.setHeightInPoints(18);
+					setCellHelper(row, 0, firstStatus ? skill : "", cellStyle);
+					setCellHelper(row, 1, statusEntry.getKey(), cellStyle);
+					Cell cCount = row.createCell(2);
+					cCount.setCellValue(statusEntry.getValue());
+					cCount.setCellStyle(centerStyle);
+					firstStatus = false;
+				}
+				// Subtotal row
+				Row rST = pivotSheet.createRow(pivRowIdx++);
+				rST.setHeightInPoints(20);
+				setCellHelper(rST, 0, skill + " Total", subtotalStyle);
+				setCellHelper(rST, 1, "", subtotalStyle);
+				Cell cST = rST.createCell(2);
+				cST.setCellValue(skillTotals.get(skill));
+				cST.setCellStyle(subtotalCenterStyle);
+			}
+			// Grand total row
+			Row rGT = pivotSheet.createRow(pivRowIdx);
+			rGT.setHeightInPoints(22);
+			setCellHelper(rGT, 0, "Grand Total", grandTotalStyle);
+			setCellHelper(rGT, 1, "", grandTotalStyle);
+			Cell cGT = rGT.createCell(2);
+			cGT.setCellValue(grandTotal);
+			cGT.setCellStyle(grandTotalCenterStyle);
+
+			// Chart helper data in hidden cols E & F
+			int numSkills = skillTotals.size();
+			if (numSkills > 0) {
+				setCellHelper(rHead, 4, "Skill",  pivotHdrStyle);
+				setCellHelper(rHead, 5, "Total",  pivotHdrStyle);
+				int cdr = 4;
+				for (Map.Entry<String, Integer> e : skillTotals.entrySet()) {
+					Row r = pivotSheet.getRow(cdr);
+					if (r == null) r = pivotSheet.createRow(cdr);
+					setCellHelper(r, 4, e.getKey(), cellStyle);
+					Cell cv = r.createCell(5);
+					cv.setCellValue(e.getValue());
+					cv.setCellStyle(centerStyle);
+					cdr++;
+				}
+				XSSFDrawing drawing = pivotSheet.createDrawingPatriarch();
+				XSSFClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 6, 0, 15, 22);
+				XSSFChart chart = drawing.createChart(anchor);
+				chart.setTitleText("Candidates by Skill");
+				chart.setTitleOverlay(false);
+				XDDFCategoryAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
+				catAxis.setTitle("Skill");
+				XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
+				valAxis.setTitle("Count");
+				XDDFDataSource<String> cats = XDDFDataSourcesFactory.fromStringCellRange(
+						pivotSheet, new CellRangeAddress(4, 3 + numSkills, 4, 4));
+				XDDFNumericalDataSource<Double> chartVals = XDDFDataSourcesFactory.fromNumericCellRange(
+						pivotSheet, new CellRangeAddress(4, 3 + numSkills, 5, 5));
+				XDDFChartData barData = chart.createData(ChartTypes.BAR, catAxis, valAxis);
+				XDDFChartData.Series series = barData.addSeries(cats, chartVals);
+				series.setTitle("Candidates", null);
+				if (barData instanceof XDDFBarChartData) {
+					((XDDFBarChartData) barData).setBarDirection(BarDirection.COL);
+				}
+				chart.plot(barData);
+				pivotSheet.setColumnHidden(4, true);
+				pivotSheet.setColumnHidden(5, true);
+			}
+
+			// ── SHEET 1: MasterData (raw rows) ────────────────────────
 			XSSFSheet masterSheet = workbook.createSheet("MasterData");
 			masterSheet.setDisplayGridlines(true);
 
@@ -1697,126 +1852,33 @@ public class DemandServiceImpl implements DemandService {
 			for (int i = 0; i < mHeaders.length; i++) {
 				Cell c = rMHead.createCell(i);
 				c.setCellValue(mHeaders[i]);
-				c.setCellStyle(hdrStyle);
+				c.setCellStyle(navyHdrStyle);
 			}
-
 			int mRowIdx = 1;
 			for (MasterDataRow m : masterRows) {
 				Row r = masterSheet.createRow(mRowIdx++);
 				r.setHeightInPoints(18);
-				String[] vals = {
+				String[] mVals = {
 						m.getClient(), m.getSkill(), m.getCandidateName(), m.getStatus(),
 						m.getContactNo(), m.getEmail(), m.getProject(), m.getDemandId()
 				};
-				for (int i = 0; i < vals.length; i++) {
+				for (int i = 0; i < mVals.length; i++) {
 					Cell c = r.createCell(i);
-					c.setCellValue(vals[i] != null ? vals[i] : "-");
+					c.setCellValue(mVals[i] != null ? mVals[i] : "-");
 					c.setCellStyle(cellStyle);
 				}
 			}
-			for (int i = 0; i < mHeaders.length; i++) {
-				masterSheet.autoSizeColumn(i);
-				if (masterSheet.getColumnWidth(i) > 12000) masterSheet.setColumnWidth(i, 12000);
-				if (masterSheet.getColumnWidth(i) < 3000)  masterSheet.setColumnWidth(i, 3000);
-			}
+			autoSizeColumnsHelper(masterSheet, mHeaders.length);
 
-			// ─────────────────────────────────────────────────────────
-			// SHEET 1 — Pivot  (XSSFPivotTable + chart)
-			// ─────────────────────────────────────────────────────────
-			XSSFSheet pivotSheet = workbook.createSheet("Pivot");
-			pivotSheet.setDisplayGridlines(false);
-
-			// Source data range on MasterData (row 0 = header, rows 1..N = data)
-			int lastDataRow = masterRows.size(); // 0-based last row index in MasterData
-			AreaReference sourceRef;
-			if (lastDataRow < 1) {
-				// No data – still create a 1-row pivot so the file is valid
-				sourceRef = new AreaReference(
-						new CellReference(0, 0), new CellReference(1, mHeaders.length - 1),
-						SpreadsheetVersion.EXCEL2007);
-			} else {
-				sourceRef = new AreaReference(
-						new CellReference(0, 0), new CellReference(lastDataRow, mHeaders.length - 1),
-						SpreadsheetVersion.EXCEL2007);
-			}
-
-			// Place the pivot table at cell B2 on the Pivot sheet
-			CellReference pivotTopLeft = new CellReference("B2");
-			XSSFPivotTable pivotTable = pivotSheet.createPivotTable(sourceRef, pivotTopLeft, masterSheet);
-
-			// Row Labels: Skill (col 1), Status (col 3)
-			pivotTable.addRowLabel(1);  // Skill column
-			pivotTable.addRowLabel(3);  // Status column
-
-			// Values: COUNT of Status
-			pivotTable.addColumnLabel(DataConsolidateFunction.COUNT, 3, "Count of Status");
-
-			// Report Filter: Client (col 0)
-			pivotTable.addReportFilter(0);
-
-			// ── Chart helper data: Skill totals in cols N & O (indices 13,14)
-			// Aggregate skill totals for the chart
-			Map<String, Integer> skillTotals = new TreeMap<>();
-			for (MasterDataRow m : masterRows) {
-				skillTotals.merge(m.getSkill(), 1, Integer::sum);
-			}
-
-			int numSkills = skillTotals.size();
-			if (numSkills > 0) {
-				// Write helper header row at row 0 (cols N & O)
-				Row r0 = pivotSheet.getRow(0);
-				if (r0 == null) r0 = pivotSheet.createRow(0);
-				r0.createCell(13).setCellValue("Skill");
-				r0.createCell(14).setCellValue("Total");
-
-				int chartDataRow = 1;
-				for (Map.Entry<String, Integer> entry : skillTotals.entrySet()) {
-					Row r = pivotSheet.getRow(chartDataRow);
-					if (r == null) r = pivotSheet.createRow(chartDataRow);
-					r.createCell(13).setCellValue(entry.getKey());
-					r.createCell(14).setCellValue(entry.getValue());
-					chartDataRow++;
-				}
-
-				// ── Clustered column chart anchored at col R, row 1 ──
-				XSSFDrawing drawing = pivotSheet.createDrawingPatriarch();
-				// Anchor: col 17 (R), row 1 → col 27 (AB), row 22
-				XSSFClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 17, 1, 27, 22);
-				XSSFChart chart = drawing.createChart(anchor);
-				chart.setTitleText("Total Candidates by Skill");
-				chart.setTitleOverlay(false);
-
-				XDDFCategoryAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
-				catAxis.setTitle("Skill");
-				XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
-				valAxis.setTitle("Count");
-
-				XDDFDataSource<String> cats = XDDFDataSourcesFactory.fromStringCellRange(
-						pivotSheet, new CellRangeAddress(1, numSkills, 13, 13));
-				XDDFNumericalDataSource<Double> vals = XDDFDataSourcesFactory.fromNumericCellRange(
-						pivotSheet, new CellRangeAddress(1, numSkills, 14, 14));
-
-				XDDFChartData barData = chart.createData(ChartTypes.BAR, catAxis, valAxis);
-				XDDFChartData.Series series = barData.addSeries(cats, vals);
-				series.setTitle("Candidates", null);
-				if (barData instanceof XDDFBarChartData) {
-					((XDDFBarChartData) barData).setBarDirection(BarDirection.COL);
-				}
-				chart.plot(barData);
-			}
-
-			// Hide the helper columns (N & O) from view
-			pivotSheet.setColumnHidden(13, true);
-			pivotSheet.setColumnHidden(14, true);
-
-			// Set Pivot sheet as active (it is sheet index 1)
-			workbook.setActiveSheet(1);
-			workbook.setSelectedTab(1);
+			// Pivot Summary is active (index 0)
+			workbook.setActiveSheet(0);
+			workbook.setSelectedTab(0);
 
 			workbook.write(out);
 			return out.toByteArray();
 		}
 	}
+
 
 	private static class MasterDataRow {
 		private String client;

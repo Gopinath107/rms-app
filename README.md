@@ -55,27 +55,30 @@ The configuration parameters are managed in [src/main/resources/application.prop
 The application expects a PostgreSQL instance running locally on port `5432`. It operates within a dedicated schema named `rms` inside the database named `resource`.
 ```properties
 spring.datasource.url=jdbc:postgresql://localhost:5432/resource?currentSchema=rms
-spring.datasource.username=rms
-spring.datasource.password=rms
+spring.datasource.username=your_db_user
+spring.datasource.password=your_db_password
 spring.jpa.hibernate.ddl-auto=update
 spring.datasource.hikari.connection-init-sql=SET search_path TO rms
 ```
 
 ### 2. Security & JWT
 Role-based route permissions are governed by JSON Web Tokens.
-*   **Secret Key**: `rms-secret-key-for-jwt-token-generation-must-be-at-least-256-bits-long-for-HS256-algorithm`
+*   **Secret Key**: `your-jwt-secret-key-for-jwt-token-generation-must-be-at-least-256-bits`
 *   **Expiration Duration**: 86400000 ms (24 hours)
 
 ### 3. AWS S3 Integration
 The backend integrates with AWS S3 for hosting resume attachments:
-*   **Region**: `eu-north-1`
-*   **Bucket Name**: `rms-resume-bucket`
-*   **Enforce SSE**: `true`
+*   **Region**: `your-aws-region`
+*   **Bucket Name**: `your-s3-bucket-name`
+*   **Access Key**: `YOUR_AWS_ACCESS_KEY`
+*   **Secret Key**: `YOUR_AWS_SECRET_KEY`
 
 ### 4. Zoho Mail Server Settings
 Auto-email notifications for interview schedules and allocations use Zoho SMTP:
 *   **SMTP Host**: `smtp.zoho.com`
 *   **Port**: `587` (TLS enabled)
+*   **Username**: `your-email@example.com`
+*   **Password**: `your-email-password`
 
 ---
 

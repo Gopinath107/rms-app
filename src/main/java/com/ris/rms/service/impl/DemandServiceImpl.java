@@ -2047,8 +2047,6 @@ public class DemandServiceImpl implements DemandService {
 					cntCell.setCellValue(se.getValue());
 					cntCell.setCellStyle(cntSt);
 
-					// Set outline level for collapsible grouping
-					sRow.setOutlineLevel(1);
 
 					demSubTotal += se.getValue();
 					pvRow++;
@@ -2082,8 +2080,11 @@ public class DemandServiceImpl implements DemandService {
 			gTotCnt.setCellValue(pvGrandTotal);
 			gTotCnt.setCellStyle(pvGrandCountStyle);
 
-			// Set sheet outline properties — summary rows below detail
-			pivSumSheet.getWorksheet().getSheetFormatPr().setOutlineLevelRow(1);
+			// Apply row grouping for collapsible +/- buttons
+			for (int[] range : outlineRanges) {
+				pivSumSheet.groupRow(range[0], range[1]);
+			}
+			pivSumSheet.setRowSumsBelow(true);
 
 			// ── SHEET 2: Charts ──────────────────────────────────────────────────
 			// Write helper data then create charts based on Demand Summary data.

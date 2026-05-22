@@ -1581,10 +1581,12 @@ public class DemandServiceImpl implements DemandService {
 	}
 
 	// ═══════════════════════════════════════════════════════
-	// DETAILED RESOURCE REPORT  — Real XSSFPivotTable version
+	// DETAILED RESOURCE REPORT
 	// Sheet layout:
-	//   [0] MasterData  — raw candidate rows (pivot data source)
-	//   [1] Pivot       — XSSFPivotTable + column chart  (active)
+	//   [0] Demand Summary  — one row per demand with level counts
+	//   [1] Pivot Summary   — grouped demand×stage breakdown with outline grouping
+	//   [2] Charts          — clustered bar + pie chart (visible data)
+	//   [3] MasterData      — raw candidate rows
 	// ═══════════════════════════════════════════════════════
 
 	@Override
@@ -1891,17 +1893,210 @@ public class DemandServiceImpl implements DemandService {
 
 			autoSizeColumnsHelper(pivotSheet, totalCols);
 
-			// ── SHEET 1: Charts ──────────────────────────────────────────────────
-			// Write helper data then create a clustered bar chart (pipeline by demand)
-			// and a pie chart (allocated vs not allocated overall).
+			// ── SHEET 1: Pivot Summary ─────────────────────────────────────────
+			// Grouped by Demand/Skill, sub-rows = Stage + Status, with counts
+			// ────────────────────────────────────────────────────────────────────
+			XSSFSheet pivSumSheet = workbook.createSheet("Pivot Summary");
+			pivSumSheet.setDisplayGridlines(true);
+
+			// Styles for Pivot Summary
+			XSSFCellStyle pvGroupHdrStyle = workbook.createCellStyle();
+			pvGroupHdrStyle.setFont(whiteBoldFont);
+			pvGroupHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 56, 100), null)); // #1F3864
+			pvGroupHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			pvGroupHdrStyle.setBorderBottom(BorderStyle.THIN); pvGroupHdrStyle.setBorderTop(BorderStyle.THIN);
+			pvGroupHdrStyle.setBorderLeft(BorderStyle.THIN);  pvGroupHdrStyle.setBorderRight(BorderStyle.THIN);
+			pvGroupHdrStyle.setAlignment(HorizontalAlignment.LEFT);
+			pvGroupHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+
+			XSSFCellStyle pvSubRowStyle = workbook.createCellStyle();
+			pvSubRowStyle.setFont(plainFont);
+			pvSubRowStyle.setBorderBottom(BorderStyle.THIN); pvSubRowStyle.setBorderTop(BorderStyle.THIN);
+			pvSubRowStyle.setBorderLeft(BorderStyle.THIN);  pvSubRowStyle.setBorderRight(BorderStyle.THIN);
+			pvSubRowStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+			pvSubRowStyle.setIndention((short) 2);
+
+			XSSFCellStyle pvSubRowAltStyle = workbook.createCellStyle();
+			pvSubRowAltStyle.cloneStyleFrom(pvSubRowStyle);
+			pvSubRowAltStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(245, 245, 245), null));
+			pvSubRowAltStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+			XSSFCellStyle pvCountStyle = workbook.createCellStyle();
+			pvCountStyle.setFont(plainFont);
+			pvCountStyle.setBorderBottom(BorderStyle.THIN); pvCountStyle.setBorderTop(BorderStyle.THIN);
+			pvCountStyle.setBorderLeft(BorderStyle.THIN);  pvCountStyle.setBorderRight(BorderStyle.THIN);
+			pvCountStyle.setAlignment(HorizontalAlignment.CENTER);
+			pvCountStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+
+			XSSFCellStyle pvCountAltStyle = workbook.createCellStyle();
+			pvCountAltStyle.cloneStyleFrom(pvCountStyle);
+			pvCountAltStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(245, 245, 245), null));
+			pvCountAltStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+			XSSFCellStyle pvSubtotalStyle = workbook.createCellStyle();
+			pvSubtotalStyle.setFont(boldFont);
+			pvSubtotalStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(189, 215, 238), null)); // #BDD7EE
+			pvSubtotalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			pvSubtotalStyle.setBorderBottom(BorderStyle.MEDIUM); pvSubtotalStyle.setBorderTop(BorderStyle.THIN);
+			pvSubtotalStyle.setBorderLeft(BorderStyle.THIN);   pvSubtotalStyle.setBorderRight(BorderStyle.THIN);
+			pvSubtotalStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+
+			XSSFCellStyle pvSubtotalCountStyle = workbook.createCellStyle();
+			pvSubtotalCountStyle.cloneStyleFrom(pvSubtotalStyle);
+			pvSubtotalCountStyle.setAlignment(HorizontalAlignment.CENTER);
+
+			XSSFCellStyle pvGrandStyle = workbook.createCellStyle();
+			pvGrandStyle.setFont(whiteBoldFont);
+			pvGrandStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(46, 64, 87), null)); // #2E4057
+			pvGrandStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+			pvGrandStyle.setBorderBottom(BorderStyle.DOUBLE); pvGrandStyle.setBorderTop(BorderStyle.MEDIUM);
+			pvGrandStyle.setBorderLeft(BorderStyle.THIN);    pvGrandStyle.setBorderRight(BorderStyle.THIN);
+			pvGrandStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+
+			XSSFCellStyle pvGrandCountStyle = workbook.createCellStyle();
+			pvGrandCountStyle.cloneStyleFrom(pvGrandStyle);
+			pvGrandCountStyle.setAlignment(HorizontalAlignment.CENTER);
+
+			// Column widths: A = ~280px, B = ~200px, C = ~100px
+			pivSumSheet.setColumnWidth(0, 11000);  // ~280px
+			pivSumSheet.setColumnWidth(1, 7800);   // ~200px
+			pivSumSheet.setColumnWidth(2, 3900);   // ~100px
+
+			// Title row
+			int pvRow = 0;
+			Row pvTitleRow = pivSumSheet.createRow(pvRow);
+			pvTitleRow.setHeightInPoints(30);
+			Cell pvTitleCell = pvTitleRow.createCell(0);
+			pvTitleCell.setCellValue("Pivot Summary — Demand × Stage Breakdown");
+			pvTitleCell.setCellStyle(titleStyle);
+			pivSumSheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 2));
+			pvRow++;
+
+			// Subtitle
+			Row pvSubRow = pivSumSheet.createRow(pvRow);
+			pvSubRow.setHeightInPoints(16);
+			Cell pvSubCell = pvSubRow.createCell(0);
+			pvSubCell.setCellValue("Grouped by Demand + Skill → Interview Stage & Status → Candidate Count");
+			pvSubCell.setCellStyle(subStyle2);
+			pivSumSheet.addMergedRegion(new CellRangeAddress(1, 1, 0, 2));
+			pvRow++;
+
+			// Spacer
+			pivSumSheet.createRow(pvRow).setHeightInPoints(6);
+			pvRow++;
+
+			// Header row (row 3) — freeze below this
+			Row pvHdrRow = pivSumSheet.createRow(pvRow);
+			pvHdrRow.setHeightInPoints(26);
+			setCellHelper(pvHdrRow, 0, "Demand / Skill", pivotHdrStyle);
+			setCellHelper(pvHdrRow, 1, "Interview Stage & Status", pivotHdrStyle);
+			setCellHelper(pvHdrRow, 2, "Count", pivotHdrStyle);
+			pvRow++;
+
+			// Freeze header row
+			pivSumSheet.createFreezePane(0, pvRow);
+
+			// AutoFilter on header
+			pivSumSheet.setAutoFilter(new CellRangeAddress(pvRow - 1, pvRow - 1, 0, 2));
+
+			// Build pivot data: group masterRows by DemandId, then by status
+			int pvGrandTotal = 0;
+			// Track sub-row ranges for outline grouping
+			List<int[]> outlineRanges = new ArrayList<>();
+
+			for (Map.Entry<String, List<MasterDataRow>> demEntry : rowsByDemand.entrySet()) {
+				String demandId = demEntry.getKey();
+				List<MasterDataRow> demRows = demEntry.getValue();
+				if (demRows.isEmpty()) continue;
+
+				MasterDataRow first = demRows.get(0);
+				String groupLabel = "\u229E " + demandId.replace("DEM-", "Demand -")
+						+ " (" + first.getClient() + ") — " + first.getSkill();
+
+				// Group header row
+				Row gRow = pivSumSheet.createRow(pvRow);
+				gRow.setHeightInPoints(24);
+				setCellHelper(gRow, 0, groupLabel, pvGroupHdrStyle);
+				setCellHelper(gRow, 1, "", pvGroupHdrStyle);
+				setCellHelper(gRow, 2, "", pvGroupHdrStyle);
+				// Merge group header across all columns
+				pivSumSheet.addMergedRegion(new CellRangeAddress(pvRow, pvRow, 0, 2));
+				int groupHeaderRow = pvRow;
+				pvRow++;
+
+				// Count by stage+status
+				Map<String, Integer> stageCounts = new LinkedHashMap<>();
+				for (MasterDataRow m : demRows) {
+					String st = m.getStatus() != null && !m.getStatus().isBlank() ? m.getStatus() : "Pending";
+					stageCounts.merge(st, 1, Integer::sum);
+				}
+
+				int subRowStart = pvRow;
+				int subIdx = 0;
+				int demSubTotal = 0;
+				for (Map.Entry<String, Integer> se : stageCounts.entrySet()) {
+					boolean isAlt = (subIdx % 2 == 1);
+					XSSFCellStyle rowSt = isAlt ? pvSubRowAltStyle : pvSubRowStyle;
+					XSSFCellStyle cntSt = isAlt ? pvCountAltStyle : pvCountStyle;
+
+					Row sRow = pivSumSheet.createRow(pvRow);
+					sRow.setHeightInPoints(20);
+					setCellHelper(sRow, 0, "", rowSt);
+					setCellHelper(sRow, 1, se.getKey(), rowSt);
+					Cell cntCell = sRow.createCell(2);
+					cntCell.setCellValue(se.getValue());
+					cntCell.setCellStyle(cntSt);
+
+					// Set outline level for collapsible grouping
+					sRow.setOutlineLevel(1);
+
+					demSubTotal += se.getValue();
+					pvRow++;
+					subIdx++;
+				}
+
+				// Subtotal row
+				Row stRow = pivSumSheet.createRow(pvRow);
+				stRow.setHeightInPoints(22);
+				String subLabel = "  " + demandId.replace("DEM-", "Demand -") + " Total";
+				setCellHelper(stRow, 0, subLabel, pvSubtotalStyle);
+				setCellHelper(stRow, 1, "", pvSubtotalStyle);
+				Cell stCnt = stRow.createCell(2);
+				stCnt.setCellValue(demSubTotal);
+				stCnt.setCellStyle(pvSubtotalCountStyle);
+				pvRow++;
+
+				pvGrandTotal += demSubTotal;
+
+				if (subRowStart < pvRow - 1) {
+					outlineRanges.add(new int[]{subRowStart, pvRow - 2});
+				}
+			}
+
+			// Grand Total row
+			Row gTotRow = pivSumSheet.createRow(pvRow);
+			gTotRow.setHeightInPoints(26);
+			setCellHelper(gTotRow, 0, "Grand Total", pvGrandStyle);
+			setCellHelper(gTotRow, 1, "", pvGrandStyle);
+			Cell gTotCnt = gTotRow.createCell(2);
+			gTotCnt.setCellValue(pvGrandTotal);
+			gTotCnt.setCellStyle(pvGrandCountStyle);
+
+			// Set sheet outline properties — summary rows below detail
+			pivSumSheet.getWorksheet().getSheetFormatPr().setOutlineLevelRow(1);
+
+			// ── SHEET 2: Charts ──────────────────────────────────────────────────
+			// Write helper data then create charts based on Demand Summary data.
 			// ────────────────────────────────────────────────────────────────────
 			XSSFSheet chartSheet = workbook.createSheet("Charts");
 			chartSheet.setDisplayGridlines(false);
 
-			// ── Chart 1 helper data: Pipeline by Demand ──
-			// Row 0: Header (Demand ID, L1, L2, L3, HR Round, Final Round, Allocated)
-			// Row 1..N: one row per demand
+			// ── Chart data area: use visible rows, starting from row 0 ──
+			// Columns: A=Demand ID, B..F=L1..Final Round, G=Allocated
+			int chartCols = 1 + LEVEL_COLS.length + 1; // DemandID + levels + Allocated
 			int chartDataStartRow = 0;
+
+			// Header row
 			Row chHdr = chartSheet.createRow(chartDataStartRow);
 			chHdr.setHeightInPoints(18);
 			setCellHelper(chHdr, 0, "Demand ID", navyHdrStyle);
@@ -1926,10 +2121,18 @@ public class DemandServiceImpl implements DemandService {
 				ca2.setCellStyle(centerStyle);
 			}
 
+			// Auto-size data columns
+			for (int i = 0; i < chartCols; i++) {
+				chartSheet.autoSizeColumn(i);
+				if (chartSheet.getColumnWidth(i) < 3000) chartSheet.setColumnWidth(i, 3000);
+			}
+
 			// ── Chart 1: Clustered column chart — pipeline per demand ──
 			if (numDemands > 0) {
 				XSSFDrawing drawing1 = chartSheet.createDrawingPatriarch();
-				XSSFClientAnchor anchor1 = drawing1.createAnchor(0, 0, 0, 0, 9, 0, 25, 20);
+				// Place chart to the right of data — starts at column chartCols+1
+				int chartLeftCol = chartCols + 1;
+				XSSFClientAnchor anchor1 = drawing1.createAnchor(0, 0, 0, 0, chartLeftCol, 0, chartLeftCol + 14, Math.min(numDemands + 5, 25));
 				XSSFChart chart1 = drawing1.createChart(anchor1);
 				chart1.setTitleText("Candidate Pipeline by Demand");
 				chart1.setTitleOverlay(false);
@@ -1948,7 +2151,7 @@ public class DemandServiceImpl implements DemandService {
 					((XDDFBarChartData) barData1).setBarGrouping(BarGrouping.CLUSTERED);
 				}
 
-				// One series per level
+				// One series per level + Allocated
 				String[] chartSeriesNames = new String[LEVEL_COLS.length + 1];
 				System.arraycopy(LEVEL_COLS, 0, chartSeriesNames, 0, LEVEL_COLS.length);
 				chartSeriesNames[LEVEL_COLS.length] = "Allocated";
@@ -1962,8 +2165,7 @@ public class DemandServiceImpl implements DemandService {
 				chart1.plot(barData1);
 			}
 
-			// ── Chart 2 helper data: Allocation status pie (grand total) ──
-			// Write in a small table below the pipeline data (row numDemands+3)
+			// ── Pie chart helper data (below bar chart data) ──
 			int pieDataRow = numDemands + 3;
 			Row pieHdr = chartSheet.createRow(pieDataRow);
 			pieHdr.setHeightInPoints(18);
@@ -1983,7 +2185,9 @@ public class DemandServiceImpl implements DemandService {
 			// ── Chart 2: Pie chart — Allocation status ──
 			if (grandTotal > 0) {
 				XSSFDrawing drawing2 = chartSheet.createDrawingPatriarch();
-				XSSFClientAnchor anchor2 = drawing2.createAnchor(0, 0, 0, 0, 9, 21, 19, 38);
+				int chartLeftCol = chartCols + 1;
+				int pieTopRow = Math.min(numDemands + 5, 25) + 1;
+				XSSFClientAnchor anchor2 = drawing2.createAnchor(0, 0, 0, 0, chartLeftCol, pieTopRow, chartLeftCol + 10, pieTopRow + 15);
 				XSSFChart chart2 = drawing2.createChart(anchor2);
 				chart2.setTitleText("Overall Allocation Status");
 				chart2.setTitleOverlay(false);
@@ -1997,10 +2201,7 @@ public class DemandServiceImpl implements DemandService {
 				chart2.plot(pieData);
 			}
 
-			// Hide helper data columns (they sit to the left of the charts)
-			for (int i = 0; i <= 1 + LEVEL_COLS.length; i++) chartSheet.setColumnHidden(i, true);
-
-			// ── SHEET 2: MasterData (raw rows) ──────────────────────────────────
+			// ── SHEET 3: MasterData (raw rows) ──────────────────────────────────
 			XSSFSheet masterSheet = workbook.createSheet("MasterData");
 			masterSheet.setDisplayGridlines(true);
 

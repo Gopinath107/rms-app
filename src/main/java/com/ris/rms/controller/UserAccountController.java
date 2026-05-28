@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,6 +21,7 @@ public class UserAccountController {
 
 	private final UserAccountService service;
 
+	@PreAuthorize("hasAuthority('system-admin')")
 	@PostMapping("/create")
 	public ResponseEntity<Map<String, Object>> create(@Valid @RequestBody UserAccountDto dto) {
 		Map<String, Object> resp = new LinkedHashMap<>();
@@ -68,6 +70,7 @@ public class UserAccountController {
 		}
 	}
 
+	@PreAuthorize("hasAuthority('system-admin')")
 	@PutMapping("/update")
 	public ResponseEntity<Map<String, Object>> update(@Valid @RequestBody UserAccountDto dto) {
 		Map<String, Object> resp = new LinkedHashMap<>();
@@ -90,6 +93,7 @@ public class UserAccountController {
 		}
 	}
 
+	@PreAuthorize("hasAuthority('system-admin')")
 	@DeleteMapping("/delete")
 	public ResponseEntity<Map<String, Object>> delete(@RequestBody Map<String, Object> body) {
 		Map<String, Object> resp = new LinkedHashMap<>();

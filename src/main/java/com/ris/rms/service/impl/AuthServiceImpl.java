@@ -41,6 +41,7 @@ public class AuthServiceImpl implements AuthService {
 	private final EmailService emailService;
 
 	@Override
+	@Transactional
 	public AuthUserDto login(String email, String password, Long requestedRoleId) {
 		if (!StringUtils.hasText(email) || !StringUtils.hasText(password)) {
 			throw new IllegalArgumentException("email and password are required");
@@ -56,6 +57,12 @@ public class AuthServiceImpl implements AuthService {
 		String stored = ua.getPasswordHash();
 		if (!passwordHashUtil.verifyPassword(password, stored)) {
 			throw new IllegalArgumentException("Invalid credentials");
+		}
+
+		// BCrypt migration: if stored password is not BCrypt, re-hash and save on login
+		if (stored != null && !stored.startsWith("$2")) {
+			ua.setPasswordHash(passwordHashUtil.hashPassword(password));
+			userRepo.save(ua);
 		}
 
 		AuthUserDto out = new AuthUserDto();
@@ -155,7 +162,7 @@ public class AuthServiceImpl implements AuthService {
 		UserAccount ua = userRepo.findByEmailIgnoreCase(email)
 				.orElseThrow(() -> new IllegalArgumentException("No account found with this email address."));
 
-		String hashed = passwordHashUtil.hashPasswordSHA256(newPassword);
+		String hashed = passwordHashUtil.hashPassword(newPassword);
 		ua.setPasswordHash(hashed);
 		userRepo.save(ua);
 

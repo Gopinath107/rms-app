@@ -41,7 +41,7 @@ public class AuthServiceImpl implements AuthService {
 	private final EmailService emailService;
 
 	@Override
-	@Transactional
+	@Transactional(readOnly = false)  // override class-level readOnly=true — login migrates password hash on write
 	public AuthUserDto login(String email, String password, Long requestedRoleId) {
 		if (!StringUtils.hasText(email) || !StringUtils.hasText(password)) {
 			throw new IllegalArgumentException("email and password are required");
@@ -112,7 +112,7 @@ public class AuthServiceImpl implements AuthService {
 	}
 
 	@Override
-	@Transactional
+	@Transactional(readOnly = false)  // override class-level readOnly=true
 	public void generateAndSendOtp(String email) {
 		UserAccount ua = userRepo.findByEmailIgnoreCase(email)
 				.orElseThrow(() -> new IllegalArgumentException("No account found with this email address."));
@@ -146,7 +146,7 @@ public class AuthServiceImpl implements AuthService {
 	}
 
 	@Override
-	@Transactional
+	@Transactional(readOnly = false)  // override class-level readOnly=true — must write password to DB
 	public void resetPassword(String email, String otp, String newPassword) {
 		if (!StringUtils.hasText(newPassword) || newPassword.length() < 6) {
 			throw new IllegalArgumentException("Password must be at least 6 characters long.");

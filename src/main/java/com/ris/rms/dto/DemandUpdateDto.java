@@ -22,4 +22,5 @@ public class DemandUpdateDto {
 	private String status;
 
 	private LocalDate fulfilmentdt;
+	private Double budget;
 }

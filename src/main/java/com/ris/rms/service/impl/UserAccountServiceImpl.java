@@ -31,11 +31,14 @@ public class UserAccountServiceImpl implements UserAccountService {
 		Company comp = companyRepo.findById(dto.getCompanyId())
 				.orElseThrow(() -> new IllegalArgumentException("Company not found"));
 
-		Employee emp = employeeRepo.findById(dto.getEmployeeId())
-				.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
-
-		if (!Objects.equals(emp.getCompanyId(), dto.getCompanyId())) {
-			throw new IllegalArgumentException("Employee must belong to the same company");
+		// employeeId is optional — only look up and validate when provided
+		Employee emp = null;
+		if (dto.getEmployeeId() != null) {
+			emp = employeeRepo.findById(dto.getEmployeeId())
+					.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
+			if (!Objects.equals(emp.getCompanyId(), dto.getCompanyId())) {
+				throw new IllegalArgumentException("Employee must belong to the same company");
+			}
 		}
 
 		// Resolve role IDs — accept list or single
@@ -45,7 +48,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 		}
 		validateRoles(requestedRoleIds, dto.getCompanyId());
 
-		Optional<UserAccount> existingOpt = repo.findByEmployeeId(dto.getEmployeeId());
+		// Look up by employeeId only when one is provided
+		Optional<UserAccount> existingOpt = dto.getEmployeeId() != null
+				? repo.findByEmployeeId(dto.getEmployeeId())
+				: Optional.empty();
 		UserAccount saved;
 
 		if (existingOpt.isPresent()) {
@@ -66,10 +72,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 				}
 			}
 
-			// Update email if provided — must be employee's work or personal email
+			// Update email if provided
 			if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
 				String newEmail = dto.getEmail().trim();
-				validateEmployeeEmail(newEmail, emp);
+				if (emp != null) validateEmployeeEmail(newEmail, emp);
 				if (!newEmail.equalsIgnoreCase(existing.getEmail())
 						&& repo.existsByEmailIgnoreCase(newEmail)) {
 					throw new IllegalArgumentException("Email already in use by another account");
@@ -80,6 +86,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 			// Update password only if provided
 			if (dto.getPasswordHash() != null && !dto.getPasswordHash().isBlank()) {
 				existing.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
+			}
+
+			if (dto.getName() != null) {
+				existing.setName(dto.getName());
 			}
 
 			if (dto.getIsActive() != null) {
@@ -96,10 +106,16 @@ public class UserAccountServiceImpl implements UserAccountService {
 				throw new IllegalArgumentException("passwordHash is required for new accounts");
 			}
 
+			// When an employee IS linked, validate email matches their work/personal email
+			if (emp != null) {
+				validateEmployeeEmail(dto.getEmail().trim(), emp);
+			}
+
 			UserAccount ua = new UserAccount();
 			ua.setUserId(null);
 			ua.setCompanyId(dto.getCompanyId());
-			ua.setEmployeeId(dto.getEmployeeId());
+			ua.setEmployeeId(dto.getEmployeeId()); // null is fine — no employee linkage
+			ua.setName(dto.getName());
 			ua.setRoleIds(new ArrayList<>(requestedRoleIds));
 			ua.setEmail(dto.getEmail());
 			ua.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
@@ -110,7 +126,8 @@ public class UserAccountServiceImpl implements UserAccountService {
 
 		Map<Long, String> roleMap = buildRoleMap(saved.getRoleIds());
 		String companyName = comp.getCompanyName();
-		String empName = emp.getFirstName() + " " + emp.getLastName();
+		// empName may be null when no employee is linked
+		String empName = emp != null ? (emp.getFirstName() + " " + emp.getLastName()) : null;
 		return toDto(saved, companyName, empName, roleMap);
 	}
 
@@ -123,8 +140,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 				.orElseThrow(() -> new IllegalArgumentException("User account not found"));
 
 		String companyName = companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).orElse(null);
-		String employeeName = employeeRepo.findById(ua.getEmployeeId())
-				.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+		String employeeName = ua.getEmployeeId() != null
+				? employeeRepo.findById(ua.getEmployeeId())
+						.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null)
+				: null;
 		Map<Long, String> roleMap = buildRoleMap(ua.getRoleIds());
 
 		return toDto(ua, companyName, employeeName, roleMap);
@@ -169,7 +188,7 @@ public class UserAccountServiceImpl implements UserAccountService {
 						|| (u.getRoleIds() != null && u.getRoleIds().contains(roleId)))
 				.map(u -> {
 					String cName = companyNameMap.getOrDefault(u.getCompanyId(), null);
-					String eName = employeeNameMap.getOrDefault(u.getEmployeeId(), null);
+					String eName = u.getEmployeeId() != null ? employeeNameMap.getOrDefault(u.getEmployeeId(), null) : null;
 					return toDto(u, cName, eName, roleNameMap);
 				})
 				.toList();
@@ -196,13 +215,15 @@ public class UserAccountServiceImpl implements UserAccountService {
 			existing.setRoleIds(new ArrayList<>(requestedRoleIds));
 		}
 
-		// Email update — must be employee's work or personal email
+		// Email update — validate against employee emails only when employee is linked
 		if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
 			String newEmail = dto.getEmail().trim();
 			if (!newEmail.equalsIgnoreCase(existing.getEmail())) {
-				Employee emp = employeeRepo.findById(existing.getEmployeeId())
-						.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
-				validateEmployeeEmail(newEmail, emp);
+				if (existing.getEmployeeId() != null) {
+					Employee emp = employeeRepo.findById(existing.getEmployeeId())
+							.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
+					validateEmployeeEmail(newEmail, emp);
+				}
 				if (repo.existsByEmailIgnoreCase(newEmail)) {
 					throw new IllegalArgumentException("Email already in use by another account");
 				}
@@ -215,6 +236,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 			existing.setPasswordHash(passwordHashUtil.hashIfNeeded(dto.getPasswordHash()));
 		}
 
+		if (dto.getName() != null) {
+			existing.setName(dto.getName());
+		}
+
 		if (dto.getIsActive() != null) {
 			existing.setIsActive(dto.getIsActive());
 		}
@@ -222,8 +247,11 @@ public class UserAccountServiceImpl implements UserAccountService {
 		UserAccount saved = repo.save(existing);
 
 		String companyName = companyRepo.findById(saved.getCompanyId()).map(Company::getCompanyName).orElse(null);
-		String employeeName = employeeRepo.findById(saved.getEmployeeId())
-				.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+		// employeeName is optional when no employee is linked
+		String employeeName = saved.getEmployeeId() != null
+				? employeeRepo.findById(saved.getEmployeeId())
+						.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null)
+				: null;
 		Map<Long, String> roleMap = buildRoleMap(saved.getRoleIds());
 
 		return toDto(saved, companyName, employeeName, roleMap);
@@ -252,7 +280,8 @@ public class UserAccountServiceImpl implements UserAccountService {
 		dto.setCompanyId(u.getCompanyId());
 		dto.setCompanyName(companyName);
 		dto.setEmployeeId(u.getEmployeeId());
-		dto.setEmployeeName(employeeName);
+		dto.setEmployeeName(employeeName != null ? employeeName : u.getName());
+		dto.setName(u.getName());
 		dto.setEmail(u.getEmail());
 		dto.setIsActive(u.getIsActive());
 

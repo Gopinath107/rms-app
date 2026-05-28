@@ -259,10 +259,16 @@ public class EmployeeServiceImpl implements EmployeeService {
 			base = repo.findAll(sort);
 		}
 
+		java.util.Set<Long> userEmployeeIds = userAccountRepo.findAll().stream()
+				.map(com.ris.rms.entity.UserAccount::getEmployeeId)
+				.filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+
 		String ql = q != null ? q.toLowerCase() : null;
 		String sl = status != null ? status.toLowerCase() : null;
 
 		List<Employee> ordered = base.stream()
+				.filter(e -> !userEmployeeIds.contains(e.getEmployeeId()))
 				.filter(e -> departmentId == null || Objects.equals(e.getDepartmentId(), departmentId))
 				.filter(e -> sl == null || (e.getStatus() != null && e.getStatus().toLowerCase().contains(sl)))
 				.filter(e -> {

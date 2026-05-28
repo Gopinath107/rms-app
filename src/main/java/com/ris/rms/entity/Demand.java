@@ -82,6 +82,9 @@ public class Demand {
 	@Column(name = "overall_status", length = 50)
 	private String overallStatus;
 
+	@Column(name = "budget")
+	private Double budget;
+
 	@Column(name = "fulfilmentdt")
 	private LocalDate fulfilmentdt;
 

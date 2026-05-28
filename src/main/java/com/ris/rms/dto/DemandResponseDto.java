@@ -43,6 +43,7 @@ public class DemandResponseDto {
 	private String workMode;
 	private String priority;
 	private String overallStatus;
+	private Double budget;
 	private OffsetDateTime createddt;
 	private OffsetDateTime updateddt;
 	private Integer resourceRequestsCount;  // Required headcount target (e.g. 5)
@@ -64,5 +65,6 @@ public class DemandResponseDto {
 		private String sharedBy;       // Name of the person who shared
 		private String sharedByEmail;
 		private OffsetDateTime sharedAt;
+		private String status;
 	}
 }

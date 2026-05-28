@@ -25,10 +25,13 @@ public class UserAccount {
 	@Column(name = "user_id")
 	private Long userId;
 
-	@Column(name = "employee_id", nullable = false)
+	@Column(name = "employee_id", nullable = true)
 	private Long employeeId;
 	@Column(name = "company_id", nullable = false)
 	private Long companyId;
+
+	@Column(name = "name")
+	private String name;
 	
 	@JdbcTypeCode(SqlTypes.ARRAY)
 	@Column(name = "role_ids", columnDefinition = "bigint[]")

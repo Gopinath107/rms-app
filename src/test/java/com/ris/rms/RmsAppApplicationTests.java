@@ -10,15 +10,15 @@ import com.ris.rms.entity.UserAccount;
 class RmsAppApplicationTests {
 
 	@Autowired
-	private UserAccountRepository userAccountRepo;
+	private com.ris.rms.repository.DemandRepository demandRepo;
 
 	@Test
 	void contextLoads() {
-		System.out.println("=== USER ACCOUNTS START ===");
-		for (UserAccount u : userAccountRepo.findAll()) {
-			System.out.println("USER: " + u.getEmail() + " | PASS: " + u.getPasswordHash());
+		System.out.println("=== DEMANDS START ===");
+		for (com.ris.rms.entity.Demand d : demandRepo.findAll()) {
+			System.out.println("DEMAND: ID=" + d.getDemandid() + ", TITLE=" + d.getDemandtitle() + ", BUDGET=" + d.getBudget());
 		}
-		System.out.println("=== USER ACCOUNTS END ===");
+		System.out.println("=== DEMANDS END ===");
 	}
 
 }

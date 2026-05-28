@@ -405,6 +405,7 @@ public class DemandServiceImpl implements DemandService {
 		demand.setLocationType(dto.getLocationType());
 		demand.setWorkMode(dto.getWorkMode());
 		demand.setResourceRequestsCount(dto.getResourceRequests());
+		demand.setBudget(dto.getBudget());
 
 		demand.setOverallStatus("Open");
 
@@ -452,6 +453,7 @@ public class DemandServiceImpl implements DemandService {
 			demand.setLocationType(dto.getLocationType());
 		if (dto.getWorkMode() != null)
 			demand.setWorkMode(dto.getWorkMode());
+		demand.setBudget(dto.getBudget());
 		if (dto.getFulfilmentDt() != null)
 			demand.setFulfilmentdt(dto.getFulfilmentDt());
 
@@ -743,6 +745,7 @@ public class DemandServiceImpl implements DemandService {
 		dto.setWorkMode(demand.getWorkMode());
 		dto.setPriority(demand.getPriority());
 		dto.setOverallStatus(demand.getOverallStatus());
+		dto.setBudget(demand.getBudget());
 		dto.setCreateddt(demand.getCreateddt());
 		dto.setUpdateddt(demand.getUpdateddt());
 		dto.setResourceRequestsCount(demand.getResourceRequestsCount());
@@ -787,10 +790,27 @@ public class DemandServiceImpl implements DemandService {
 		        }
 		    });
 		}
-		dto.setSharedResumes(getResumeShareInfos(demand.getDemandid()));
-
-		// Only process real resource requests (those created via resume sharing)
 		List<ResourceRequest> childRequests = rrRepo.findActualByDemandId(demand.getDemandid());
+		List<DemandResponseDto.ResumeShareInfo> sharedResumes = getResumeShareInfos(demand.getDemandid());
+		if (sharedResumes != null) {
+			for (DemandResponseDto.ResumeShareInfo info : sharedResumes) {
+				Optional<ResourceRequest> matchingReq = childRequests.stream()
+					.filter(r -> {
+						if ("EMPLOYEE".equals(info.getResourceType())) {
+							return Objects.equals(r.getEmployeeId(), info.getResourceId());
+						} else {
+							return Objects.equals(r.getCandidateId(), info.getResourceId());
+						}
+					})
+					.findFirst();
+				if (matchingReq.isPresent()) {
+					info.setStatus(resolveResourceStatus(matchingReq.get()));
+				} else {
+					info.setStatus("Submitted");
+				}
+			}
+		}
+		dto.setSharedResumes(sharedResumes);
 
 		List<DemandRequestSummaryDto> summaryList = new ArrayList<>();
 		DemandStageCountsDto stageCounts = new DemandStageCountsDto();
@@ -2384,5 +2404,68 @@ public class DemandServiceImpl implements DemandService {
 		// Anything explicitly containing "Allocated"
 		if (upper.contains("ALLOCATED")) return true;
 		return false;
+	}
+
+	private String resolveResourceStatus(ResourceRequest req) {
+		Optional<Allocation> alloc = allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId());
+		if (alloc.isPresent()) {
+			return "Allocated";
+		}
+
+		Optional<Interview> interviewOpt = interviewRepo.findTopByRequestIdOrderByInterviewIdDesc(req.getRequestId());
+		if (interviewOpt.isPresent()) {
+			Interview interview = interviewOpt.get();
+
+			if ("Selected".equalsIgnoreCase(interview.getStatus())) {
+				return "Selected";
+			} else if ("Rejected".equalsIgnoreCase(interview.getStatus())) {
+				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
+				String rejectedLvl = "Rejected";
+				for (int i = levels.size() - 1; i >= 0; i--) {
+					LevelProgressDto lvl = levels.get(i);
+					if ("__META__".equals(lvl.getLevel())) continue;
+					if ("Rejected".equalsIgnoreCase(lvl.getStatus()) || "Fail".equalsIgnoreCase(lvl.getStatus()) || "Failed".equalsIgnoreCase(lvl.getStatus())) {
+						rejectedLvl = lvl.getLevel() + " Rejected";
+						break;
+					}
+				}
+				return rejectedLvl;
+			} else if ("Scheduled".equalsIgnoreCase(interview.getStatus())) {
+				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
+				List<LevelProgressDto> realLevels = levels.stream()
+					.filter(l -> !"__META__".equals(l.getLevel()))
+					.toList();
+				if (!realLevels.isEmpty()) {
+					LevelProgressDto latestLvl = realLevels.get(realLevels.size() - 1);
+					return latestLvl.getLevel() + " Scheduled";
+				}
+				return "Interview Scheduled";
+			} else {
+				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
+				List<LevelProgressDto> realLevels = levels.stream()
+					.filter(l -> !"__META__".equals(l.getLevel()))
+					.toList();
+				if (!realLevels.isEmpty()) {
+					LevelProgressDto latestLvl = realLevels.get(realLevels.size() - 1);
+					String lvlName = latestLvl.getLevel();
+					String lvlStatus = latestLvl.getStatus();
+					if (lvlStatus != null && !lvlStatus.isBlank()) {
+						return lvlName + " " + lvlStatus;
+					}
+					return lvlName + " In Progress";
+				}
+				return "Interview In Progress";
+			}
+		}
+
+		if ("Fulfilled".equalsIgnoreCase(req.getStatus())) {
+			return "Allocated";
+		} else if ("Rejected".equalsIgnoreCase(req.getStatus())) {
+			return "Rejected";
+		} else if ("Cancelled".equalsIgnoreCase(req.getStatus())) {
+			return "Cancelled";
+		}
+
+		return "Submitted";
 	}
 }

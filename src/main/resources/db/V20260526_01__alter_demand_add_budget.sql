@@ -1,0 +1,1 @@
+ALTER TABLE rms.demand ADD COLUMN budget NUMERIC(15,2);

@@ -15,10 +15,12 @@ public class UserAccountDto {
 
 	private String companyName;
 
-	@NotNull(message = "employeeId is required")
+	// optional — a user can be created without an employee record
 	private Long employeeId;
 
 	private String employeeName;
+
+	private String name;
 
 	// ── Single-role convenience fields (backward compat) ──────────────────
 	// roleId is NO LONGER required — populate from roleIds list

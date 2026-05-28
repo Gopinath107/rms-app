@@ -37,6 +37,7 @@ public class DemandCreateDto {
 	private LocalDate fulfilmentDt;
 	
 	private String status;
+	private Double budget;
 	
 	@NotNull
 	@Min(1)

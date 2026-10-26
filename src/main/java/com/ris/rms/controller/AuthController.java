@@ -27,6 +27,10 @@ public class AuthController {
             resp.put("errors", List.of());
             resp.put("errorCount", 0);
             return ResponseEntity.ok(resp); 
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("success", false, "message", e.getMessage(), "errors", List.of(e.getMessage())));
+        } catch (com.ris.rms.portal.PortalAccessClient.Unavailable e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("success", false, "message", e.getMessage(), "errors", List.of(e.getMessage())));
         } catch (Exception e) {
             resp.put("result", null);
             resp.put("success", false);

@@ -107,6 +107,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 	@Lazy
 	private EmployeeService self;
 	private final EmployeeRepository repo;
+    private final com.ris.rms.portal.InternalResourcingPolicy internalResourcing;
 	private final CompanyRepository companyRepo;
 	private final DepartmentRepository departmentRepo;
 	private final SkillRepository skillRepo;
@@ -250,8 +251,12 @@ public class EmployeeServiceImpl implements EmployeeService {
 		List<Employee> base;
 		Sort sort = Sort.by(Sort.Direction.DESC, "employeeId");
 
-		if (companyId != null) {
-			base = repo.findAllByCompanyId(companyId).stream()
+		if (internalResourcing.filterDirectory()) {
+            if (companyId == null) throw new org.springframework.security.access.AccessDeniedException("A company is required for internal resourcing");
+            var eligible = internalResourcing.eligible(companyId);
+            base = eligible.isEmpty() ? List.of() : repo.findByCompanyIdAndEmployeeIdIn(companyId, eligible, sort);
+        } else if (companyId != null) {
+            base = repo.findAllByCompanyId(companyId).stream()
 					.sorted(Comparator.comparing(Employee::getEmployeeId).reversed()).toList();
 		} else if (page != null && size != null && page >= 0 && size > 0) {
 			base = repo.findAll(PageRequest.of(page, size, sort)).getContent();

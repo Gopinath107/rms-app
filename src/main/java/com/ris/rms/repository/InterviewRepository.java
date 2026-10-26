@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import com.ris.rms.entity.Interview;
 
 public interface InterviewRepository extends JpaRepository<Interview, Long> {
+	List<Interview> findByInterviewIdIn(java.util.Collection<Long> ids, org.springframework.data.domain.Sort sort);
 
 	List<Interview> findAllByRequestIdOrderByScheduledAtDesc(Long requestId);
 

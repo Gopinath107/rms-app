@@ -62,6 +62,7 @@ import lombok.RequiredArgsConstructor;
 public class InterviewServiceImpl implements InterviewService {
 
 	private final InterviewRepository repo;
+    private final com.ris.rms.portal.PortalCompanyScope portalCompanyScope;
 	private final InterviewFeedbackRepository feedbackRepo;
 	private final EmailService emailService;
 	private final ResourceRequestRepository rrRepo;
@@ -207,7 +208,10 @@ public class InterviewServiceImpl implements InterviewService {
 		if (requestId != null && !rrRepo.existsById(requestId))
 			throw new IllegalArgumentException("Request not found: " + requestId);
 
-		List<Interview> base = (page != null && size != null && page >= 0 && size > 0)
+		var scopedIds = portalCompanyScope.interviewIds();
+        List<Interview> base = scopedIds != null
+                ? (scopedIds.isEmpty() ? List.of() : repo.findByInterviewIdIn(scopedIds, Sort.by(Sort.Direction.DESC, "interviewId", "scheduledAt")))
+                : (page != null && size != null && page >= 0 && size > 0)
 				? repo.findAll(PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "interviewId", "scheduledAt")))
 						.getContent()
 				: repo.findAll().stream().sorted(Comparator

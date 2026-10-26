@@ -30,6 +30,7 @@ public class DemandMatchingService {
     private final EmployeeDocumentRepository docRepo;
     private final ResumeStorageService resumeStorage;
     private final LlmClientService llmClient;
+    private final com.ris.rms.portal.InternalResourcingPolicy internalResourcing;
 
     private final Tika tika = new Tika();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -52,6 +53,10 @@ public class DemandMatchingService {
                 demand.getYearsofexp());
 
         List<Employee> employees = employeeRepo.findAllByCompanyId(demand.getCompanyId());
+        if (internalResourcing.enabled()) {
+            var eligible = internalResourcing.eligible(demand.getCompanyId());
+            employees = employees.stream().filter(employee -> eligible.contains(employee.getEmployeeId())).toList();
+        }
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<MatchResponseDto>> futures = employees.stream()

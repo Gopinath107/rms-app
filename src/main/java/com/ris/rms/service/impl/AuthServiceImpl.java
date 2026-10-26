@@ -39,6 +39,7 @@ public class AuthServiceImpl implements AuthService {
 	private final PasswordHashUtil passwordHashUtil;
 	private final PasswordResetTokenRepository passwordResetTokenRepo;
 	private final EmailService emailService;
+	private final com.ris.rms.portal.PortalAccessClient portalAccess;
 
 	@Override
 	public AuthUserDto login(String email, String password, Long requestedRoleId) {
@@ -59,6 +60,7 @@ public class AuthServiceImpl implements AuthService {
 		}
 
 		AuthUserDto out = new AuthUserDto();
+		portalAccess.access(ua);
 		out.setUserId(ua.getUserId());
 		out.setCompanyId(ua.getCompanyId());
 		out.setEmail(ua.getEmail());

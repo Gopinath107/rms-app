@@ -11,6 +11,7 @@ import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.EmployeeDocument;
 
 public interface EmployeeRepository extends JpaRepository<Employee, Long> {
+	List<Employee> findByCompanyIdAndEmployeeIdIn(Long companyId, java.util.Collection<Long> employeeIds, org.springframework.data.domain.Sort sort);
 
 	boolean existsByCompanyIdAndEmailIgnoreCase(Long companyId, String email);
 

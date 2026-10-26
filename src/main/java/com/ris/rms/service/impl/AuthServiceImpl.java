@@ -39,6 +39,7 @@ public class AuthServiceImpl implements AuthService {
 	private final PasswordHashUtil passwordHashUtil;
 	private final PasswordResetTokenRepository passwordResetTokenRepo;
 	private final EmailService emailService;
+	private final com.ris.rms.portal.PortalAccessClient portalAccess;
 
 	@Override
 	@Transactional(readOnly = false)  // override class-level readOnly=true — login migrates password hash on write
@@ -66,6 +67,7 @@ public class AuthServiceImpl implements AuthService {
 		}
 
 		AuthUserDto out = new AuthUserDto();
+		portalAccess.access(ua);
 		out.setUserId(ua.getUserId());
 		out.setCompanyId(ua.getCompanyId());
 		out.setEmail(ua.getEmail());

@@ -83,6 +83,16 @@ class PortalAccessFilterTest {
         verifyNoInteractions(policy);
     }
 
+    @Test void anInternalEmployeeCannotBypassEligibilityByClaimingExternalType() throws Exception {
+        when(jdbc.queryForList(anyString(), eq(Long.class), eq(42L))).thenReturn(List.of(77L));
+        doThrow(new AccessDeniedException("Not available")).when(policy).requireAvailable(42L);
+        var request = json("/api/allocations/create", "{\"employeeId\":42,\"resourceType\":\"EXTERNAL\"}");
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> fail("An internal ID must always be checked"));
+        assertThat(response.getStatus()).isEqualTo(403);
+        verify(policy).requireAvailable(42L);
+    }
+
     @Test void forgedCompanyAndMissingActionPermissionAreRejected() throws Exception {
         var request = new MockHttpServletRequest("GET", "/api/employees/list"); request.addParameter("companyId", "88");
         var response = new MockHttpServletResponse();

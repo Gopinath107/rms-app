@@ -91,7 +91,7 @@ public class PortalAccessFilter extends OncePerRequestFilter {
                 if (employeeId == null && body.hasNonNull("employeeId")) employeeId = number(body.path("employeeId").asText());
                 if (employeeId != null) checkEmployeeCompany(employeeId, access);
                 boolean newPlacement = path.contains("share-resume") || path.equals("/api/allocations/create") || path.equals("/api/resource-requests/create");
-                if (newPlacement && employeeId != null && !body.path("resourceType").asText().equalsIgnoreCase("EXTERNAL")) resourcing.requireAvailable(employeeId);
+                if (newPlacement && employeeId != null) resourcing.requireAvailable(employeeId);
                 if (newPlacement && body.path("employeeIds").isArray()) for (JsonNode id : body.path("employeeIds")) { checkEmployeeCompany(id.asLong(), access); resourcing.requireAvailable(id.asLong()); }
             }
             Long defaultCompany = user.getCompanyId();

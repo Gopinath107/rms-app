@@ -333,7 +333,13 @@ public class DemandServiceImpl implements DemandService {
 		Specification<Demand> dupSpec = (root, query, cb) -> {
 			List<Predicate> p = new ArrayList<>();
 			p.add(cb.equal(root.get("companyId"), dto.getCompanyId()));
-			p.add(cb.equal(root.get("demandtitle"), dto.getDemandTitle()));
+			if (dto.getAccountId() != null) {
+				p.add(cb.equal(root.get("accountId"), dto.getAccountId()));
+			}
+			if (dto.getDemandTitle() != null) {
+				p.add(cb.equal(cb.lower(cb.trim(root.get("demandtitle"))),
+						dto.getDemandTitle().trim().toLowerCase(Locale.ROOT)));
+			}
 			p.add(cb.notEqual(root.get("overallStatus"), "Cancelled"));
 			return cb.and(p.toArray(new Predicate[0]));
 		};
@@ -397,6 +403,29 @@ public class DemandServiceImpl implements DemandService {
 
 		if ("Cancelled".equalsIgnoreCase(demand.getOverallStatus())) {
 			throw new IllegalArgumentException("This Demand is Cancelled and cannot be edited.");
+		}
+
+		Long targetAccountId = dto.getAccountId() != null ? dto.getAccountId() : demand.getAccountId();
+		String targetTitle = dto.getDemandTitle() != null ? dto.getDemandTitle() : demand.getDemandtitle();
+
+		if (dto.getDemandTitle() != null || dto.getAccountId() != null) {
+			Specification<Demand> dupSpec = (root, query, cb) -> {
+				List<Predicate> p = new ArrayList<>();
+				p.add(cb.equal(root.get("companyId"), demand.getCompanyId()));
+				if (targetAccountId != null) {
+					p.add(cb.equal(root.get("accountId"), targetAccountId));
+				}
+				if (targetTitle != null) {
+					p.add(cb.equal(cb.lower(cb.trim(root.get("demandtitle"))),
+							targetTitle.trim().toLowerCase(Locale.ROOT)));
+				}
+				p.add(cb.notEqual(root.get("overallStatus"), "Cancelled"));
+				p.add(cb.notEqual(root.get("demandid"), demandId));
+				return cb.and(p.toArray(new Predicate[0]));
+			};
+			if (demandRepo.count(dupSpec) > 0) {
+				throw new IllegalArgumentException("A Demand with this title already exists. Please check the list.");
+			}
 		}
 
 		if (dto.getResourceRequests() != null) {

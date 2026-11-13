@@ -26,15 +26,15 @@ public class PasswordHashUtil {
         if (rawPassword == null || storedPassword == null) {
             return false;
         }
-        
-        
-        if (!isHexString(storedPassword)) {
-            String hashedStored = hashPasswordSHA256(storedPassword);
-            return hashedStored.equals(rawPassword);
+
+        // SHA-256 hex digests are 64 hex chars; support both plaintext (current UI) and pre-hashed clients.
+        if (storedPassword.length() == 64 && isHexString(storedPassword)) {
+            return storedPassword.equalsIgnoreCase(rawPassword)
+                    || storedPassword.equalsIgnoreCase(hashPasswordSHA256(rawPassword));
         }
-        
-       
-        return storedPassword.equals(rawPassword);
+
+        return storedPassword.equals(rawPassword)
+                || hashPasswordSHA256(storedPassword).equalsIgnoreCase(rawPassword);
     }
 
     

@@ -12,9 +12,9 @@ import com.ris.rms.service.ResumeStorageService.ResumeResource;
 
 public interface CandidateService {
 
-	CandidateDto create(CandidateDto dto, MultipartFile resume) throws Exception;
+	CandidateDto create(CandidateDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws Exception;
 
-	CandidateDto update(Long id, CandidateDto dto, MultipartFile resume) throws Exception;
+	CandidateDto update(Long id, CandidateDto dto, MultipartFile resume, List<MultipartFile> documentFiles, String documentData) throws Exception;
 
 	CandidateDto getById(Long id);
 
@@ -27,5 +27,7 @@ public interface CandidateService {
     ResumeResource getResumeByCandidateId(Long candidateId) throws Exception;
 
     ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename) throws Exception;
+
+    ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename, boolean overrideExisting) throws Exception;
 
 }

@@ -29,6 +29,7 @@ import com.ris.rms.dto.EmployeeDto;
 import com.ris.rms.dto.ImportResultDto;
 import com.ris.rms.dto.ResumeShareDto;
 import com.ris.rms.service.EmployeeService;
+import com.ris.rms.service.ResourceImportTemplateService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +40,7 @@ import lombok.RequiredArgsConstructor;
 public class EmployeeController {
 
 	private final EmployeeService service;
+	private final ResourceImportTemplateService importTemplateService;
 
 	@PostMapping(path = "/create", consumes = "multipart/form-data", produces = "application/json")
 	public ResponseEntity<Map<String, Object>> createMultipart(@RequestParam Long companyId,
@@ -92,7 +94,9 @@ public class EmployeeController {
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
 			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks) {
+			@RequestParam(required = false) String socialLinks,
+			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
+			@RequestParam(required = false) String documentData) {
 		var resp = new java.util.LinkedHashMap<String, Object>();
 		try {
 			var dto = new EmployeeDto();
@@ -168,7 +172,7 @@ public class EmployeeController {
 			if (socialLinks != null && !socialLinks.isBlank()) {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
 			}
-			var saved = service.create(dto, resume);
+			var saved = service.create(dto, resume, documentFiles, documentData);
 
 			resp.put("result", saved);
 			resp.put("success", true);
@@ -268,7 +272,9 @@ public class EmployeeController {
 			@RequestParam(required = false) String suggestedKeywords,
 			@RequestParam(required = false) String primarySkills,
 			@RequestParam(required = false) String secondarySkills,
-			@RequestParam(required = false) String socialLinks) {
+			@RequestParam(required = false) String socialLinks,
+			@RequestPart(required = false, name = "documentFiles") java.util.List<org.springframework.web.multipart.MultipartFile> documentFiles,
+			@RequestParam(required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
@@ -345,7 +351,7 @@ public class EmployeeController {
 				try { dto.setSocialLinks(om.readValue(socialLinks, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, String>>>() {})); } catch (Exception ignored) {}
 			}
 
-			EmployeeDto updated = service.update(employeeId, dto, resume);
+			EmployeeDto updated = service.update(employeeId, dto, resume, documentFiles, documentData);
 
 			resp.put("result", updated);
 			resp.put("success", true);
@@ -386,9 +392,20 @@ public class EmployeeController {
 		}
 	}
 
+	@GetMapping("/import-template")
+	public ResponseEntity<byte[]> downloadImportTemplate(@RequestParam(required = false) Long companyId) {
+		byte[] bytes = importTemplateService.generateTemplate("internal", companyId);
+		return ResponseEntity.ok()
+				.contentType(MediaType.parseMediaType(
+						"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"Employee_Import_Template.xlsx\"")
+				.body(bytes);
+	}
+
 	@PostMapping(path = "/importExcel", consumes = "multipart/form-data")
 	public ResponseEntity<Map<String, Object>> importEmployees(@RequestParam("file") MultipartFile file,
-			@RequestParam("companyId") Long companyId) {
+			@RequestParam("companyId") Long companyId,
+			@RequestParam(value = "overrideExisting", defaultValue = "false") boolean overrideExisting) {
 		Map<String, Object> resp = new LinkedHashMap<>();
 		if (file.isEmpty()) {
 			resp.put("success", false);
@@ -399,7 +416,7 @@ public class EmployeeController {
 
 		try {
 			ImportResultDto result = service.importEmployees(companyId, file.getInputStream(),
-					file.getOriginalFilename());
+					file.getOriginalFilename(), overrideExisting);
 
 			resp.put("result", result);
 			resp.put("success", result.getFailureCount() == 0);

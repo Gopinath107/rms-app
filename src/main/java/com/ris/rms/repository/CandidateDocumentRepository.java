@@ -30,4 +30,6 @@ public interface CandidateDocumentRepository extends JpaRepository<CandidateDocu
 			      and (d.documentType is null or lower(d.documentType) = 'resume')
 			""")
 	List<CandidateDocument> findPrimaryResumesForCandidates(@Param("candidateIds") List<Long> candidateIds);
+
+	List<CandidateDocument> findByCandidateIdOrderByDocumentIdDesc(Long candidateId);
 }

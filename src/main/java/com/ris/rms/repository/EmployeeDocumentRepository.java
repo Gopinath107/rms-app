@@ -31,6 +31,8 @@ public interface EmployeeDocumentRepository extends JpaRepository<EmployeeDocume
 
 	Optional<EmployeeDocument> findTopByEmployeeIdOrderByDocumentIdDesc(Long employeeId);
 
+	List<EmployeeDocument> findByEmployeeIdOrderByDocumentIdDesc(Long employeeId);
+
 	@Query("""
 			    select d from EmployeeDocument d
 			    where d.employeeId in :employeeIds

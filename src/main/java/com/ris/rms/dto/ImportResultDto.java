@@ -8,6 +8,8 @@ import lombok.Data;
 public class ImportResultDto {
     private int totalRows;
     private int successCount;
+    private int createdCount;
+    private int updatedCount;
     private int failureCount;
     private List<String> errors = new ArrayList<>();
 }

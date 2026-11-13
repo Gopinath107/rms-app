@@ -28,6 +28,7 @@ import com.ris.rms.dto.CandidateDto;
 import com.ris.rms.dto.ImportResultDto;
 import com.ris.rms.dto.ResumeShareDto;
 import com.ris.rms.service.CandidateService;
+import com.ris.rms.service.ResourceImportTemplateService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -40,6 +41,7 @@ import lombok.RequiredArgsConstructor;
 public class CandidateController {
 
 	private final CandidateService candidateService;
+	private final ResourceImportTemplateService importTemplateService;
 	private static final ObjectMapper OM = new ObjectMapper();
 
 	@PostMapping(value = "/create", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = "application/json")
@@ -48,12 +50,14 @@ public class CandidateController {
 			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
 			@RequestParam(value = "primarySkills", required = false) String primarySkills,
 			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
-			@RequestPart(value = "resume", required = false) MultipartFile resume) {
+			@RequestPart(value = "resume", required = false) MultipartFile resume,
+			@RequestPart(value = "documentFiles", required = false) List<MultipartFile> documentFiles,
+			@RequestParam(value = "documentData", required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			applySkillPayload(dto, skillIds, skillNames, primarySkills, secondarySkills);
-			CandidateDto result = candidateService.create(dto, resume);
+			CandidateDto result = candidateService.create(dto, resume, documentFiles, documentData);
 			resp.put("result", result);
 			resp.put("success", true);
 			resp.put("errors", List.of());
@@ -74,7 +78,9 @@ public class CandidateController {
 			@RequestParam(value = "skillNames", required = false) List<String> skillNames,
 			@RequestParam(value = "primarySkills", required = false) String primarySkills,
 			@RequestParam(value = "secondarySkills", required = false) String secondarySkills,
-			@RequestPart(value = "resume", required = false) MultipartFile resume) {
+			@RequestPart(value = "resume", required = false) MultipartFile resume,
+			@RequestPart(value = "documentFiles", required = false) List<MultipartFile> documentFiles,
+			@RequestParam(value = "documentData", required = false) String documentData) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
@@ -84,7 +90,7 @@ public class CandidateController {
 				throw new IllegalArgumentException("candidateId is required for update");
 			}
 
-			CandidateDto result = candidateService.update(id, dto, resume);
+			CandidateDto result = candidateService.update(id, dto, resume, documentFiles, documentData);
 			resp.put("result", result);
 			resp.put("success", true);
 			resp.put("errors", List.of());
@@ -211,9 +217,20 @@ public class CandidateController {
 		}
 	}
 
+	@GetMapping("/import-template")
+	public ResponseEntity<byte[]> downloadImportTemplate(@RequestParam(required = false) Long companyId) {
+		byte[] bytes = importTemplateService.generateTemplate("external", companyId);
+		return ResponseEntity.ok()
+				.contentType(MediaType.parseMediaType(
+						"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"Candidate_Import_Template.xlsx\"")
+				.body(bytes);
+	}
+
 	@PostMapping(path = "/importExcel", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public ResponseEntity<Map<String, Object>> importCandidates(@RequestParam("file") MultipartFile file,
-			@RequestParam("companyId") Long companyId) {
+			@RequestParam("companyId") Long companyId,
+			@RequestParam(value = "overrideExisting", defaultValue = "false") boolean overrideExisting) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 		if (file.isEmpty()) {
@@ -225,7 +242,7 @@ public class CandidateController {
 
 		try {
 			ImportResultDto result = candidateService.importCandidates(companyId, file.getInputStream(),
-					file.getOriginalFilename());
+					file.getOriginalFilename(), overrideExisting);
 
 			resp.put("result", result);
 			resp.put("success", result.getFailureCount() == 0);

@@ -82,6 +82,12 @@ public class Employee {
 	@Column(name = "status", length = 50)
 	private String status;
 
+	@Column(name = "current_project_id")
+	private Long currentProjectId;
+
+	@Column(name = "current_account_id")
+	private Long currentAccountId;
+
 	@Column(name = "gender", length = 20)
 	private String gender;
 

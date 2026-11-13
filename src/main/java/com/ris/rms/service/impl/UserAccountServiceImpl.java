@@ -108,9 +108,8 @@ public class UserAccountServiceImpl implements UserAccountService {
 	public UserAccountDto getById(Long id) {
 		UserAccount ua = repo.findById(id).orElseThrow(() -> new IllegalArgumentException("User account not found"));
 
-		String companyName = companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).orElse(null);
-		String employeeName = employeeRepo.findById(ua.getEmployeeId())
-				.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+		String companyName = resolveCompanyName(ua.getCompanyId());
+		String employeeName = resolveEmployeeName(ua.getEmployeeId());
 		
 		String roleName = null;
 		if (ua.getRoleId() != null) {
@@ -140,22 +139,22 @@ public class UserAccountServiceImpl implements UserAccountService {
 		final String needle = q == null ? null : q.toLowerCase();
 		
 		return base.stream()
-				.filter(u -> isActive == null || u.getIsActive().equals(isActive))
+				.filter(u -> isActive == null || Objects.equals(u.getIsActive(), isActive))
 				.filter(u -> needle == null || (u.getEmail() != null && u.getEmail().toLowerCase().contains(needle)))
 				
 				.flatMap(u -> {
                     List<Long> rIds = u.getRoleIds();
                     
                     if (rIds == null || rIds.isEmpty()) {
-                        return Stream.of(toDto(u, 
-                        		companyRepo.findById(u.getCompanyId()).map(Company::getCompanyName).orElse(null), 
-                        		employeeRepo.findById(u.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null), 
+                        return Stream.of(toDto(u,
+                        		resolveCompanyName(u.getCompanyId()),
+                        		resolveEmployeeName(u.getEmployeeId()),
                         		null));
                     }
 
                     return rIds.stream().map(rId -> {
-                    	String cName = companyRepo.findById(u.getCompanyId()).map(Company::getCompanyName).orElse(null);
-                    	String eName = employeeRepo.findById(u.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+                    	String cName = resolveCompanyName(u.getCompanyId());
+                    	String eName = resolveEmployeeName(u.getEmployeeId());
                         String rName = roleMap.getOrDefault(rId, "Unknown Role");
                         
                         UserAccountDto dto = new UserAccountDto();
@@ -235,9 +234,8 @@ public class UserAccountServiceImpl implements UserAccountService {
 
 		UserAccount saved = repo.save(existing);
 
-		String companyName = companyRepo.findById(saved.getCompanyId()).map(Company::getCompanyName).orElse(null);
-		String employeeName = employeeRepo.findById(saved.getEmployeeId())
-				.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+		String companyName = resolveCompanyName(saved.getCompanyId());
+		String employeeName = resolveEmployeeName(saved.getEmployeeId());
 		
 		if (updatedRoleId == null && saved.getRoleId() != null) {
 			updatedRoleId = saved.getRoleId();
@@ -273,5 +271,19 @@ public class UserAccountServiceImpl implements UserAccountService {
 		dto.setIsActive(u.getIsActive());
 
 		return dto;
+	}
+
+	private String resolveCompanyName(Long companyId) {
+		if (companyId == null) {
+			return null;
+		}
+		return companyRepo.findById(companyId).map(Company::getCompanyName).orElse(null);
+	}
+
+	private String resolveEmployeeName(Long employeeId) {
+		if (employeeId == null) {
+			return null;
+		}
+		return employeeRepo.findById(employeeId).map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
 	}
 }

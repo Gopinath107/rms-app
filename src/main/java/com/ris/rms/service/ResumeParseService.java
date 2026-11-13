@@ -1,5 +1,6 @@
 package com.ris.rms.service;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,6 +13,12 @@ import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.hwpf.HWPFDocument;
+import org.apache.poi.hwpf.extractor.WordExtractor;
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -46,7 +53,8 @@ public class ResumeParseService {
             throw new IllegalArgumentException("Please upload a PDF, DOC, or DOCX file.");
         }
 
-        String rawText = extractText(file.getInputStream(), file.getContentType(), originalName);
+        byte[] fileBytes = file.getBytes();
+        String rawText = extractText(fileBytes, file.getContentType(), originalName, ext);
         if (rawText == null || rawText.isBlank()) {
             throw new IllegalArgumentException("Could not extract text from the resume. The file may be image-based or corrupted.");
         }
@@ -75,8 +83,18 @@ public class ResumeParseService {
     // Text Extraction
     // -------------------------------------------------------------------------
 
-    private String extractText(InputStream inputStream, String contentType, String fileName) {
+    private String extractText(byte[] fileBytes, String contentType, String fileName, String ext) {
+        String textFromTika = extractWithTika(fileBytes, contentType, fileName);
+        if (textFromTika != null && !textFromTika.isBlank()) {
+            return textFromTika;
+        }
+        log.warn("Tika returned empty text for file {}. Falling back to extension-based extractor.", fileName);
+        return extractByExtension(fileBytes, ext);
+    }
+
+    private String extractWithTika(byte[] fileBytes, String contentType, String fileName) {
         try {
+            InputStream inputStream = new ByteArrayInputStream(fileBytes);
             BodyContentHandler handler = new BodyContentHandler(200 * 1024); // 200KB text limit
             Metadata metadata = new Metadata();
             metadata.set(Metadata.CONTENT_TYPE, contentType != null ? contentType : "application/octet-stream");
@@ -89,8 +107,43 @@ public class ResumeParseService {
             parser.parse(inputStream, handler, metadata, context);
             return handler.toString();
         } catch (Exception e) {
-            log.error("Tika text extraction failed: {}", e.getMessage());
+            log.error("Tika text extraction failed for file {}: {}", fileName, e.getMessage(), e);
             return null;
+        }
+    }
+
+    private String extractByExtension(byte[] fileBytes, String ext) {
+        try {
+            return switch (ext) {
+                case "pdf" -> extractPdfText(fileBytes);
+                case "docx" -> extractDocxText(fileBytes);
+                case "doc" -> extractDocText(fileBytes);
+                default -> null;
+            };
+        } catch (Exception e) {
+            log.error("Extension-based extraction failed for extension {}: {}", ext, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    private String extractPdfText(byte[] fileBytes) throws Exception {
+        try (PDDocument document = PDDocument.load(fileBytes)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            return stripper.getText(document);
+        }
+    }
+
+    private String extractDocxText(byte[] fileBytes) throws Exception {
+        try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(fileBytes));
+                XWPFWordExtractor extractor = new XWPFWordExtractor(document)) {
+            return extractor.getText();
+        }
+    }
+
+    private String extractDocText(byte[] fileBytes) throws Exception {
+        try (HWPFDocument document = new HWPFDocument(new ByteArrayInputStream(fileBytes));
+                WordExtractor extractor = new WordExtractor(document)) {
+            return extractor.getText();
         }
     }
 
@@ -391,46 +444,41 @@ public class ResumeParseService {
         return phones.toArray(new String[0]);
     }
 
-    private String extractFirstName(String text) {
+    private String[] extractNameParts(String text) {
+        if (text == null || text.isBlank()) {
+            return new String[0];
+        }
         String[] lines = text.split("\\r?\\n");
         for (String line : lines) {
             line = line.trim();
             if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                return line.split("\\s+")[0];
+                return line.split("\\s+");
             }
         }
-        return "";
+        return new String[0];
+    }
+
+    private String extractFirstName(String text) {
+        String[] parts = extractNameParts(text);
+        return parts.length >= 1 ? parts[0] : "";
     }
 
     private String extractMiddleName(String text) {
-        String[] lines = text.split("\\r?\\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                String[] parts = line.split("\\s+");
-                if (parts.length > 2) {
-                    StringBuilder mn = new StringBuilder();
-                    for (int i = 1; i < parts.length - 1; i++) {
-                        if (i > 1) mn.append(" ");
-                        mn.append(parts[i]);
-                    }
-                    return mn.toString();
-                }
-            }
+        String[] parts = extractNameParts(text);
+        if (parts.length <= 2) {
+            return "";
         }
-        return "";
+        StringBuilder mn = new StringBuilder();
+        for (int i = 1; i < parts.length - 1; i++) {
+            if (i > 1) mn.append(" ");
+            mn.append(parts[i]);
+        }
+        return mn.toString();
     }
 
     private String extractLastName(String text) {
-        String[] lines = text.split("\\r?\\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                String[] parts = line.split("\\s+");
-                if (parts.length >= 2) return parts[parts.length - 1];
-            }
-        }
-        return "";
+        String[] parts = extractNameParts(text);
+        return parts.length >= 2 ? parts[parts.length - 1] : "";
     }
 
     private String extractLocation(String text) {

@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 import com.ris.rms.entity.PasswordResetToken;
 import com.ris.rms.repository.PasswordResetTokenRepository;
@@ -134,7 +135,18 @@ public class AuthServiceImpl implements AuthService {
 
 		passwordResetTokenRepo.save(token);
 
-		emailService.sendPasswordResetOtpAsync(email, otp);
+		boolean sent;
+		try {
+			sent = Boolean.TRUE.equals(emailService.sendPasswordResetOtpAsync(email, otp).get(15, TimeUnit.SECONDS));
+		} catch (InterruptedException ie) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("Interrupted while sending OTP email.", ie);
+		} catch (Exception ex) {
+			throw new IllegalStateException("Failed to send OTP email.", ex);
+		}
+		if (!sent) {
+			throw new IllegalStateException("Failed to send OTP email. Check SMTP configuration.");
+		}
 	}
 
 	@Override

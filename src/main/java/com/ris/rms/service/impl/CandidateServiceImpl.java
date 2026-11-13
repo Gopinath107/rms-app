@@ -34,7 +34,9 @@ import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
@@ -78,6 +80,7 @@ import com.ris.rms.repository.SkillRepository;
 import com.ris.rms.repository.StatusMasterRepository;
 import com.ris.rms.repository.UserAccountRepository;
 import com.ris.rms.service.CandidateService;
+import com.ris.rms.service.ImportResumeResolver;
 import com.ris.rms.service.DemandService;
 import com.ris.rms.service.EmailService;
 import com.ris.rms.service.ResumeStorageService;
@@ -92,6 +95,9 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class CandidateServiceImpl implements CandidateService {
 
+	@Autowired
+	@Lazy
+	private CandidateService self;
 	private final CandidateRepository candidateRepo;
 	private final CandidateSkillRepository candidateSkillRepo;
 	private final CandidateDocumentRepository candidateDocumentRepo;
@@ -655,75 +661,153 @@ public class CandidateServiceImpl implements CandidateService {
 		candidateRepo.deleteById(id);
 	}
 
+	private record ImportedCandidateRow(CandidateDto dto, String resumePath, int rowNum) {
+	}
+
 	@Override
 	@Transactional(propagation = Propagation.NOT_SUPPORTED)
 	public ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename) throws Exception {
+		return importCandidates(companyId, inputStream, filename, false);
+	}
+
+	@Override
+	@Transactional(propagation = Propagation.NOT_SUPPORTED)
+	public ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename,
+			boolean overrideExisting) throws Exception {
 		ImportResultDto result = new ImportResultDto();
-		List<CandidateDto> candidatesToCreate = new ArrayList<>();
+		List<ImportedCandidateRow> rowsToImport = new ArrayList<>();
 
 		if (filename == null || filename.isBlank())
 			throw new IllegalArgumentException("Filename is required to determine file type.");
 
-		String lowerFilename = filename.toLowerCase();
+		String lowerFilename = filename.toLowerCase(Locale.ROOT);
 
 		try {
 			if (lowerFilename.endsWith(".csv")) {
-				candidatesToCreate = parseCsv(companyId, inputStream, result);
-			} else if (lowerFilename.endsWith(".xlsx")) {
-				candidatesToCreate = parseExcel(companyId, inputStream, result);
+				rowsToImport = parseCsv(companyId, inputStream, result);
+			} else if (lowerFilename.endsWith(".xlsx") || lowerFilename.endsWith(".xls")) {
+				rowsToImport = parseExcel(companyId, inputStream, result);
 			} else {
-				throw new IllegalArgumentException("Unsupported file type. Please upload a .csv or .xlsx file.");
+				throw new IllegalArgumentException(
+						"Unsupported file type. Please upload a .csv, .xls, or .xlsx file.");
 			}
 		} catch (Exception e) {
 			result.getErrors().add("Error parsing file: " + e.getMessage());
-			result.setFailureCount(result.getTotalRows());
+			result.setFailureCount(Math.max(result.getFailureCount(), result.getTotalRows()));
 			return result;
 		}
 
-		for (CandidateDto dto : candidatesToCreate) {
+		for (ImportedCandidateRow row : rowsToImport) {
+			CandidateDto dto = row.dto();
 			try {
-				create(dto, null, null, null);
-				result.setSuccessCount(result.getSuccessCount() + 1);
+				Optional<Candidate> existingOpt = candidateRepo.findByCompanyIdAndEmailIgnoreCase(companyId,
+						dto.getEmail());
+				if (existingOpt.isEmpty() && overrideExisting) {
+					existingOpt = ImportResumeResolver.matchByPhoneAndOptionalName(
+							candidateRepo.findAllByCompanyId(companyId),
+							dto.getPhoneNumber(),
+							dto.getFirstName(),
+							dto.getLastName(),
+							cand -> List.of(cand.getPhoneNumber() == null ? "" : cand.getPhoneNumber()),
+							cand -> ImportResumeResolver.normalizeFullNameKey(cand.getFirstName(), cand.getLastName()));
+				}
+				if (existingOpt.isPresent()) {
+					if (!overrideExisting) {
+						throw new IllegalArgumentException("Candidate email '" + dto.getEmail()
+								+ "' already exists for this company (enable Override existing to update).");
+					}
+					Candidate existing = existingOpt.get();
+					MultipartFile resumeFile = null;
+					if (row.resumePath() != null && !row.resumePath().isBlank()) {
+						resumeFile = ImportResumeResolver.resolve(row.resumePath());
+					} else if (candidateDocumentRepo.findPrimaryResume(existing.getCandidateId()).isEmpty()) {
+						throw new IllegalArgumentException(
+								"Row " + row.rowNum() + ": Required column 'Resume Path' is missing or empty.");
+					}
+					self.update(existing.getCandidateId(), dto, resumeFile, null, null);
+					result.setUpdatedCount(result.getUpdatedCount() + 1);
+					result.setSuccessCount(result.getSuccessCount() + 1);
+				} else {
+					if (row.resumePath() == null || row.resumePath().isBlank()) {
+						throw new IllegalArgumentException(
+								"Row " + row.rowNum() + ": Required column 'Resume Path' is missing or empty.");
+					}
+					MultipartFile resumeFile = ImportResumeResolver.resolve(row.resumePath());
+					if (dto.getSourceType() == null || dto.getSourceType().isBlank()) {
+						dto.setSourceType("Imported");
+					}
+					self.create(dto, resumeFile, null, null);
+					result.setCreatedCount(result.getCreatedCount() + 1);
+					result.setSuccessCount(result.getSuccessCount() + 1);
+				}
 			} catch (Exception e) {
 				result.setFailureCount(result.getFailureCount() + 1);
-				String errorMsg = String.format("Error creating candidate '%s %s' (Email: %s): %s", dto.getFirstName(),
-						dto.getLastName(), dto.getEmail(), e.getMessage());
+				String errorMsg = String.format("Row %d ('%s %s', Email: %s): %s", row.rowNum(),
+						dto.getFirstName() != null ? dto.getFirstName() : "",
+						dto.getLastName() != null ? dto.getLastName() : "",
+						dto.getEmail(), e.getMessage());
 				result.getErrors().add(errorMsg);
 			}
 		}
 		return result;
 	}
 
-	private List<CandidateDto> parseCsv(Long companyId, InputStream inputStream, ImportResultDto result)
+	private static final Pattern BASIC_EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+
+	private List<ImportedCandidateRow> parseCsv(Long companyId, InputStream inputStream, ImportResultDto result)
 			throws Exception {
-		List<CandidateDto> dtos = new ArrayList<>();
+		List<ImportedCandidateRow> rows = new ArrayList<>();
 		try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
 				CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.builder().setHeader()
 						.setSkipHeaderRecord(true).setIgnoreHeaderCase(true).setTrim(true).build())) {
 
-			Map<String, Integer> headerMap = csvParser.getHeaderMap();
-			validateHeaders(headerMap.keySet());
+			Map<String, Integer> rawHeaderMap = csvParser.getHeaderMap();
+			Map<String, Integer> normalizedHeaderMap = new HashMap<>();
+			for (Map.Entry<String, Integer> entry : rawHeaderMap.entrySet()) {
+				String norm = ImportResumeResolver.normalizeHeaderKey(entry.getKey());
+				if (!norm.isEmpty()) {
+					normalizedHeaderMap.putIfAbsent(norm, entry.getValue());
+				}
+			}
+			validateHeaders(normalizedHeaderMap.keySet());
 
 			int rowNum = 1;
 			for (CSVRecord csvRecord : csvParser) {
+				boolean anyNonBlank = false;
+				for (int i = 0; i < csvRecord.size(); i++) {
+					String v = csvRecord.get(i);
+					if (v != null && !v.trim().isEmpty()) {
+						anyNonBlank = true;
+						break;
+					}
+				}
+				if (!anyNonBlank) {
+					continue;
+				}
 				result.setTotalRows(result.getTotalRows() + 1);
 				try {
-					CandidateDto dto = mapRecordToDto(companyId, csvRecord::get, headerMap.keySet(), rowNum);
-					dtos.add(dto);
+					Function<String, String> valueProvider = normKey -> {
+						Integer idx = normalizedHeaderMap.get(normKey);
+						if (idx == null || idx >= csvRecord.size())
+							return null;
+						String val = csvRecord.get(idx);
+						return val == null ? null : val.trim();
+					};
+					rows.add(mapRecordToRow(companyId, valueProvider, normalizedHeaderMap, rowNum));
 				} catch (Exception e) {
 					result.setFailureCount(result.getFailureCount() + 1);
-					result.getErrors().add("Error parsing CSV row " + rowNum + ": " + e.getMessage());
+					result.getErrors().add("CSV row " + rowNum + ": " + e.getMessage());
 				}
 				rowNum++;
 			}
 		}
-		return dtos;
+		return rows;
 	}
 
-	private List<CandidateDto> parseExcel(Long companyId, InputStream inputStream, ImportResultDto result)
+	private List<ImportedCandidateRow> parseExcel(Long companyId, InputStream inputStream, ImportResultDto result)
 			throws Exception {
-		List<CandidateDto> dtos = new ArrayList<>();
-		try (Workbook workbook = new XSSFWorkbook(inputStream)) {
+		List<ImportedCandidateRow> rows = new ArrayList<>();
+		try (Workbook workbook = WorkbookFactory.create(inputStream)) {
 			Sheet sheet = workbook.getSheetAt(0);
 			if (sheet == null)
 				throw new IllegalArgumentException("Excel file is empty or has no sheets.");
@@ -733,49 +817,52 @@ public class CandidateServiceImpl implements CandidateService {
 				throw new IllegalArgumentException("Excel sheet is empty.");
 
 			Row headerRow = rowIterator.next();
-			Map<String, Integer> headerMap = new HashMap<>();
+			Map<String, Integer> normalizedHeaderMap = new HashMap<>();
 			DataFormatter dataFormatter = new DataFormatter();
 			for (Cell cell : headerRow) {
 				String headerText = dataFormatter.formatCellValue(cell).trim();
-				if (!headerText.isEmpty())
-					headerMap.put(headerText.toLowerCase(), cell.getColumnIndex());
+				String norm = ImportResumeResolver.normalizeHeaderKey(headerText);
+				if (!norm.isEmpty())
+					normalizedHeaderMap.putIfAbsent(norm, cell.getColumnIndex());
 			}
-			validateHeaders(headerMap.keySet());
+			validateHeaders(normalizedHeaderMap.keySet());
 
-			int rowNum = 1;
+			int excelRowNum = 2;
 			while (rowIterator.hasNext()) {
 				Row currentRow = rowIterator.next();
-				result.setTotalRows(result.getTotalRows() + 1);
-				if (isRowEmpty(currentRow))
+				if (isRowEmpty(currentRow)) {
+					excelRowNum++;
 					continue;
+				}
+				result.setTotalRows(result.getTotalRows() + 1);
 
 				try {
-					Function<String, String> cellValueProvider = headerName -> {
-						Integer colIndex = headerMap.get(headerName.toLowerCase());
+					Function<String, String> cellValueProvider = normKey -> {
+						Integer colIndex = normalizedHeaderMap.get(normKey);
 						if (colIndex == null)
 							return null;
 						Cell cell = currentRow.getCell(colIndex);
 						return (cell == null) ? null : dataFormatter.formatCellValue(cell).trim();
 					};
-					CandidateDto dto = mapRecordToDto(companyId, cellValueProvider, headerMap.keySet(), rowNum);
-					dtos.add(dto);
+					rows.add(mapRecordToRow(companyId, cellValueProvider, normalizedHeaderMap, excelRowNum));
 				} catch (Exception e) {
 					result.setFailureCount(result.getFailureCount() + 1);
-					result.getErrors().add("Error parsing Excel row " + (rowNum + 1) + ": " + e.getMessage());
+					result.getErrors().add("Excel row " + excelRowNum + ": " + e.getMessage());
 				}
-				rowNum++;
+				excelRowNum++;
 			}
 		}
-		return dtos;
+		return rows;
 	}
 
-	private CandidateDto mapRecordToDto(Long companyId, Function<String, String> valueProvider,
-			Set<String> availableHeaders, int rowNum) {
+	private ImportedCandidateRow mapRecordToRow(Long companyId, Function<String, String> valueProvider,
+			Map<String, Integer> headerMap, int rowNum) {
 
 		CandidateDto dto = new CandidateDto();
 		dto.setCompanyId(companyId);
 
-		String name = valueProvider.apply("Name");
+		String name = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Name", "Full Name", "Candidate Name"));
 		if (name != null && !name.isBlank()) {
 			String[] nameParts = name.trim().split("\\s+", 2);
 			dto.setFirstName(nameParts[0]);
@@ -784,54 +871,132 @@ public class CandidateServiceImpl implements CandidateService {
 			throw new IllegalArgumentException("Required column 'Name' is missing or empty.");
 		}
 
-		dto.setEmail(valueProvider.apply("Email"));
-		if (dto.getEmail() == null || dto.getEmail().isBlank())
+		String email = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Email", "Work Email", "Official Email"));
+		if (email == null || email.isBlank())
 			throw new IllegalArgumentException("Required column 'Email' is missing or empty.");
+		if (!BASIC_EMAIL.matcher(email.trim()).matches())
+			throw new IllegalArgumentException("Invalid 'Email' format: " + email);
+		dto.setEmail(email.trim());
 
-		dto.setPhoneNumber(valueProvider.apply("PhoneNumber"));
-		dto.setLocation(valueProvider.apply("Location"));
-		dto.setStatus(valueProvider.apply("Status"));
+		String phone = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Phone Number", "PhoneNumber", "Phone", "Primary Contact", "Mobile", "Contact Number"));
+		if (phone == null || phone.isBlank())
+			throw new IllegalArgumentException("Required column 'Phone Number' is missing or empty.");
+		dto.setPhoneNumber(phone.trim());
 
-		String skillsRaw = valueProvider.apply("Skills");
+		String role = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Role", "Role (Designation)", "Designation", "Department"));
+		if (role == null || role.isBlank())
+			throw new IllegalArgumentException("Required column 'Role' is missing or empty.");
+
+		String explicitSpec = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Specialization"));
+		dto.setSpecialization(explicitSpec != null ? explicitSpec : role.trim());
+
+		String statusRaw = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Status", "Resource Status"));
+		if (statusRaw == null || statusRaw.isBlank())
+			throw new IllegalArgumentException("Required column 'Status' is missing or empty.");
+		dto.setStatus(normalizeCandidateStatus(statusRaw));
+
+		String experienceStr = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Experience", "Experience Years", "Total Experience", "Exp"));
+		if (experienceStr == null || experienceStr.isBlank())
+			throw new IllegalArgumentException("Required column 'Experience' is missing or empty.");
+		Matcher expMatcher = Pattern.compile("^(\\d+)").matcher(experienceStr.trim());
+		if (!expMatcher.find())
+			throw new IllegalArgumentException("Invalid 'Experience' value: " + experienceStr);
+		int years = Integer.parseInt(expMatcher.group(1));
+		if (years < 0)
+			throw new IllegalArgumentException("Experience cannot be negative: " + experienceStr);
+		dto.setExperienceYears(years);
+
+		String resumePath = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Resume Path", "ResumePath", "Resume File", "ResumeFile", "Resume URL", "ResumeUrl", "Resume"));
+
+		String skillsRaw = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap, List.of("Skills"));
 		if (skillsRaw != null && !skillsRaw.isBlank()) {
-			dto.setSkillNames(Arrays.stream(skillsRaw.split("\\|")).map(String::trim).filter(s -> !s.isEmpty())
-					.collect(Collectors.toList()));
+			dto.setSkillNames(Arrays.stream(skillsRaw.split("[,|]")).map(String::trim)
+					.filter(s -> !s.isEmpty()).collect(Collectors.toList()));
 		}
 
-		String experienceStr = valueProvider.apply("Experience");
-		if (experienceStr != null && !experienceStr.isBlank()) {
-			Matcher m = Pattern.compile("^(\\d+)").matcher(experienceStr.trim());
-			if (m.find()) {
-				try {
-					dto.setExperienceYears(Integer.parseInt(m.group(1)));
-				} catch (NumberFormatException ignored) {
-				}
-			}
-		}
+		dto.setLocation(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap, List.of("Location")));
+		dto.setSourceType(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Source Type", "SourceType")));
+		dto.setSourceName(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Source Name", "SourceName")));
+		dto.setCurrentCompany(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Current Company", "CurrentCompany")));
+		dto.setCurrentCtc(asDouble(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Current CTC", "CurrentCtc"))));
+		dto.setExpectedCtc(asDouble(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Expected CTC", "ExpectedCtc"))));
+		dto.setNoticePeriod(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Notice Period", "NoticePeriod")));
+		dto.setPreferredLocation(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Preferred Location", "PreferredLocation")));
+		dto.setPersonalEmailId(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Personal Email", "PersonalEmailId", "PersonalEmail")));
+		dto.setGender(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap, List.of("Gender")));
+		dto.setDegrees(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap, List.of("Degrees", "Degree")));
+		dto.setYearOfPassing(asInteger(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Year of Passing", "YearOfPassing"))));
+		dto.setProfileSummary(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Profile Summary", "ProfileSummary")));
+		dto.setTrainingSummary(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Training Summary", "TrainingSummary")));
+		dto.setCertificationSummary(ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Certification Summary", "CertificationSummary")));
 
-		dto.setSourceType(valueProvider.apply("SourceType"));
-		if (dto.getSourceType() == null)
-			dto.setSourceType("Imported");
-
-		dto.setSourceName(valueProvider.apply("SourceName"));
-
-		dto.setGender(valueProvider.apply("Gender"));
-		dto.setDegrees(valueProvider.apply("Degrees"));
-		dto.setSpecialization(valueProvider.apply("Specialization"));
-		dto.setYearOfPassing(asInteger(valueProvider.apply("YearOfPassing")));
-		dto.setProfileSummary(valueProvider.apply("ProfileSummary"));
-		dto.setTrainingSummary(valueProvider.apply("TrainingSummary"));
-		dto.setCertificationSummary(valueProvider.apply("CertificationSummary"));
-
-		return dto;
+		return new ImportedCandidateRow(dto, resumePath, rowNum);
 	}
 
-	private void validateHeaders(Set<String> presentHeaders) {
-		List<String> requiredHeaders = List.of("name", "email");
-		for (String required : requiredHeaders) {
-			boolean found = presentHeaders.stream().anyMatch(required::equalsIgnoreCase);
-			if (!found)
-				throw new IllegalArgumentException("Missing required header column: " + required);
+	private static String normalizeCandidateStatus(String raw) {
+		String s = raw.trim().toLowerCase(Locale.ROOT);
+		if (s.equals("allocated") || s.equals("billable") || s.equals("isbillable") || s.equals("available"))
+			return "isBillable";
+		if (s.equals("engaged"))
+			return "engaged";
+		if (s.equals("not allocated") || s.equals("notallocated") || s.equals("notavailable") || s.equals("bench"))
+			return "notAvailable";
+		throw new IllegalArgumentException(
+				"Invalid Status '" + raw + "'. Allowed values: Allocated, Engaged, Not Allocated, Billable, Bench");
+	}
+
+	private Double asDouble(String s) {
+		if (s == null || s.isBlank())
+			return null;
+		try {
+			return Double.parseDouble(s.trim().replace(",", ""));
+		} catch (NumberFormatException e) {
+			return null;
+		}
+	}
+
+	private void validateHeaders(Set<String> normalizedHeaders) {
+		List<String> missing = new ArrayList<>();
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders, List.of("Name", "Full Name", "Candidate Name")))
+			missing.add("Name");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders, List.of("Email", "Work Email", "Official Email")))
+			missing.add("Email");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders,
+				List.of("Role", "Role (Designation)", "Designation", "Department")))
+			missing.add("Role");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders, List.of("Status", "Resource Status")))
+			missing.add("Status");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders,
+				List.of("Experience", "Experience Years", "Total Experience", "Exp")))
+			missing.add("Experience");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders,
+				List.of("Phone Number", "PhoneNumber", "Phone", "Primary Contact", "Mobile", "Contact Number")))
+			missing.add("Phone Number");
+		if (!ImportResumeResolver.hasAnyHeader(normalizedHeaders,
+				List.of("Resume Path", "ResumePath", "Resume File", "ResumeFile", "Resume URL", "ResumeUrl", "Resume")))
+			missing.add("Resume Path");
+
+		if (!missing.isEmpty()) {
+			throw new IllegalArgumentException("Missing required header column(s): " + String.join(", ", missing));
 		}
 	}
 

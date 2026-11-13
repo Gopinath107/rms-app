@@ -4,6 +4,7 @@ import java.time.LocalDate;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -64,7 +65,10 @@ public class AccountServiceImpl implements AccountService {
 	@Override
 	@Transactional(readOnly = true)
 	public org.springframework.data.domain.Page<AccountDto> list(Long companyId, String q, Integer page, Integer size) {
-		PageRequest pageable = PageRequest.of(page != null ? page : 0, size != null ? size : 10);
+		PageRequest pageable = PageRequest.of(
+				page != null ? page : 0,
+				size != null ? size : 10,
+				Sort.by(Sort.Order.asc("accountName").ignoreCase(), Sort.Order.asc("accountId")));
 
 		Page<Account> accountPage;
 		if (companyId != null) {

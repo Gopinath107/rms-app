@@ -28,4 +28,6 @@ public interface CandidateService {
 
     ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename) throws Exception;
 
+    ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename, boolean overrideExisting) throws Exception;
+
 }

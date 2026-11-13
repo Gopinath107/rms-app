@@ -26,6 +26,8 @@ public interface EmployeeService {
 	ResumeResource getResumeByEmployeeId(Long employeeId) throws Exception;
 	
 	ImportResultDto importEmployees(Long companyId, InputStream inputStream, String filename) throws Exception;
+
+	ImportResultDto importEmployees(Long companyId, InputStream inputStream, String filename, boolean overrideExisting) throws Exception;
 	
 	ResumeShareDto shareResume(ResumeShareDto shareRequest) throws Exception;
 	

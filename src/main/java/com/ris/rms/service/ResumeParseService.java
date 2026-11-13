@@ -444,46 +444,41 @@ public class ResumeParseService {
         return phones.toArray(new String[0]);
     }
 
-    private String extractFirstName(String text) {
+    private String[] extractNameParts(String text) {
+        if (text == null || text.isBlank()) {
+            return new String[0];
+        }
         String[] lines = text.split("\\r?\\n");
         for (String line : lines) {
             line = line.trim();
             if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                return line.split("\\s+")[0];
+                return line.split("\\s+");
             }
         }
-        return "";
+        return new String[0];
+    }
+
+    private String extractFirstName(String text) {
+        String[] parts = extractNameParts(text);
+        return parts.length >= 1 ? parts[0] : "";
     }
 
     private String extractMiddleName(String text) {
-        String[] lines = text.split("\\r?\\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                String[] parts = line.split("\\s+");
-                if (parts.length > 2) {
-                    StringBuilder mn = new StringBuilder();
-                    for (int i = 1; i < parts.length - 1; i++) {
-                        if (i > 1) mn.append(" ");
-                        mn.append(parts[i]);
-                    }
-                    return mn.toString();
-                }
-            }
+        String[] parts = extractNameParts(text);
+        if (parts.length <= 2) {
+            return "";
         }
-        return "";
+        StringBuilder mn = new StringBuilder();
+        for (int i = 1; i < parts.length - 1; i++) {
+            if (i > 1) mn.append(" ");
+            mn.append(parts[i]);
+        }
+        return mn.toString();
     }
 
     private String extractLastName(String text) {
-        String[] lines = text.split("\\r?\\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.length() > 2 && line.length() < 50 && line.matches("[A-Z][a-zA-Z]+(?:\\s+[A-Za-z]+)*")) {
-                String[] parts = line.split("\\s+");
-                if (parts.length >= 2) return parts[parts.length - 1];
-            }
-        }
-        return "";
+        String[] parts = extractNameParts(text);
+        return parts.length >= 2 ? parts[parts.length - 1] : "";
     }
 
     private String extractLocation(String text) {

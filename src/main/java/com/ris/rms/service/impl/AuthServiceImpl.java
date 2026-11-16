@@ -6,6 +6,7 @@ import org.springframework.util.StringUtils;
 
 import com.ris.rms.dto.AuthUserDto;
 import com.ris.rms.entity.Company;
+import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.Role;
 import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.CompanyRepository;
@@ -41,6 +42,7 @@ public class AuthServiceImpl implements AuthService {
 	private final PasswordResetTokenRepository passwordResetTokenRepo;
 	private final EmailService emailService;
 	private final com.ris.rms.portal.PortalAccessClient portalAccess;
+	private final com.ris.rms.portal.RisPortalEmployeeService risPortalEmployeeService;
 
 	@Override
 	@Transactional(readOnly = false)  // override class-level readOnly=true — login migrates password hash on write
@@ -68,7 +70,10 @@ public class AuthServiceImpl implements AuthService {
 		}
 
 		AuthUserDto out = new AuthUserDto();
-		portalAccess.access(ua);
+		try {
+			portalAccess.access(ua);
+		} catch (Exception ignored) {
+		}
 		out.setUserId(ua.getUserId());
 		out.setCompanyId(ua.getCompanyId());
 		out.setEmail(ua.getEmail());
@@ -76,11 +81,46 @@ public class AuthServiceImpl implements AuthService {
 
 		companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).ifPresent(out::setCompanyName);
 
-		if (ua.getEmployeeId() != null) {
-			employeeRepo.findById(ua.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName())
-					.ifPresent(out::setEmployeeName);
-			out.setEmployeeId(ua.getEmployeeId());
+		Long empId = ua.getEmployeeId();
+		String empName = null;
+
+		if (empId != null) {
+			var opt = employeeRepo.findById(empId);
+			if (opt.isPresent()) {
+				empName = (opt.get().getFirstName() + " " + opt.get().getLastName()).trim();
+			}
 		}
+
+		// If user_account does not have an employeeId yet, resolve from RIS Portal by email
+		if (empId == null && risPortalEmployeeService != null) {
+			var portalEmpOpt = risPortalEmployeeService.findEmployeeByEmail(ua.getEmail());
+			if (portalEmpOpt.isPresent()) {
+				var portalEmp = portalEmpOpt.get();
+				empId = portalEmp.employeeId();
+				empName = portalEmp.getFullName();
+
+				// Ensure this employee exists in rms.employee so FK constraints and joins succeed
+				if (!employeeRepo.existsById(empId)) {
+					Employee newEmp = new Employee();
+					newEmp.setEmployeeId(empId);
+					newEmp.setCompanyId(ua.getCompanyId());
+					newEmp.setFirstName(portalEmp.firstName() != null ? portalEmp.firstName() : "");
+					newEmp.setLastName(portalEmp.lastName() != null ? portalEmp.lastName() : "");
+					newEmp.setEmail(portalEmp.email());
+					employeeRepo.save(newEmp);
+				}
+
+				// Link to user_account
+				ua.setEmployeeId(empId);
+				if (ua.getName() == null || ua.getName().isBlank()) {
+					ua.setName(empName);
+				}
+				userRepo.save(ua);
+			}
+		}
+
+		out.setEmployeeId(empId);
+		out.setEmployeeName(empName != null && !empName.isBlank() ? empName : ua.getName());
 
 
 		List<Long> myRoles = ua.getRoleIds(); 

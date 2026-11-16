@@ -111,8 +111,10 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 			}
 
 			requesterEmail = ua.getEmail();
-			requesterName = employeeRepo.findById(ua.getEmployeeId()).map(e -> e.getFirstName() + " " + e.getLastName())
-					.orElse(null);
+			String empName = (ua.getEmployeeId() != null)
+					? employeeRepo.findById(ua.getEmployeeId()).map(e -> (e.getFirstName() + " " + e.getLastName()).trim()).orElse(null)
+					: null;
+			requesterName = (empName != null && !empName.isBlank()) ? empName : ua.getName();
 		}
 
 		if (companyId == null) {
@@ -146,7 +148,9 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 
 		if (dto.getDemandId() != null && accountName == null) {
 			demandRepo.findById(dto.getDemandId()).ifPresent(d -> {
-				accountRepo.findById(d.getAccountId()).ifPresent(a -> out.setAccountName(a.getAccountName()));
+				if (d.getAccountId() != null) {
+					accountRepo.findById(d.getAccountId()).ifPresent(a -> out.setAccountName(a.getAccountName()));
+				}
 			});
 		}
 
@@ -165,8 +169,12 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 			for (UserAccount hr : hrList) {
 				if (hr.getEmail() == null || hr.getEmail().isBlank())
 					continue;
-				String hrName = employeeRepo.findById(hr.getEmployeeId())
-						.map(e -> (e.getFirstName() + " " + e.getLastName()).trim()).orElse("HR");
+				String hrName = (hr.getEmployeeId() != null)
+						? employeeRepo.findById(hr.getEmployeeId()).map(e -> (e.getFirstName() + " " + e.getLastName()).trim()).orElse(null)
+						: null;
+				if (hrName == null || hrName.isBlank()) {
+					hrName = (hr.getName() != null && !hr.getName().isBlank()) ? hr.getName() : "HR";
+				}
 
 				futures.add(emailService.sendHrResReqCreatedAsync(hr.getEmail(), hrName, projName, accName,
 						out.getRequestId(), submitted, out.getPriority(), out.getNumberOfResources(),
@@ -194,8 +202,10 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 			UserAccount ua = userAccountRepo.findById(rr.getRequesterUserId()).orElse(null);
 			if (ua != null) {
 				requesterEmail = ua.getEmail();
-				requesterName = employeeRepo.findById(ua.getEmployeeId())
-						.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+				String empName = (ua.getEmployeeId() != null)
+						? employeeRepo.findById(ua.getEmployeeId()).map(e -> (e.getFirstName() + " " + e.getLastName()).trim()).orElse(null)
+						: null;
+				requesterName = (empName != null && !empName.isBlank()) ? empName : ua.getName();
 			}
 		}
 
@@ -207,8 +217,12 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 			String accountName = null;
 
 			if (d != null) {
-				companyName = companyRepo.findById(d.getCompanyId()).map(Company::getCompanyName).orElse(null);
-				accountName = accountRepo.findById(d.getAccountId()).map(Account::getAccountName).orElse(null);
+				companyName = d.getCompanyId() != null
+						? companyRepo.findById(d.getCompanyId()).map(Company::getCompanyName).orElse(null)
+						: null;
+				accountName = d.getAccountId() != null
+						? accountRepo.findById(d.getAccountId()).map(Account::getAccountName).orElse(null)
+						: null;
 				dto = toDto(rr, null, companyName, accountName, requesterName, requesterEmail);
 
 				dto.setProjectName(d.getProjectName());
@@ -222,7 +236,7 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 		} else if (rr.getProjectId() != null) {
 
 			Project project = projectRepo.findById(rr.getProjectId()).orElse(null);
-			String companyName = project == null ? null
+			String companyName = (project == null || project.getCompanyId() == null) ? null
 					: companyRepo.findById(project.getCompanyId()).map(Company::getCompanyName).orElse(null);
 			String accountName = (project == null || project.getAccountId() == null) ? null
 					: accountRepo.findById(project.getAccountId()).map(Account::getAccountName).orElse(null);
@@ -233,7 +247,9 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 			if (rr.getRequesterUserId() != null) {
 				userAccountRepo.findById(rr.getRequesterUserId()).ifPresent(ua -> {
 					dto.setCompanyId(ua.getCompanyId());
-					companyRepo.findById(ua.getCompanyId()).ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
+					if (ua.getCompanyId() != null) {
+						companyRepo.findById(ua.getCompanyId()).ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
+					}
 				});
 			}
 		}
@@ -290,8 +306,10 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 						UserAccount ua = userAccountRepo.findById(rr.getRequesterUserId()).orElse(null);
 						if (ua != null) {
 							requesterEmail = ua.getEmail();
-							requesterName = employeeRepo.findById(ua.getEmployeeId())
-									.map(e -> e.getFirstName() + " " + e.getLastName()).orElse(null);
+							String empName = (ua.getEmployeeId() != null)
+									? employeeRepo.findById(ua.getEmployeeId()).map(e -> (e.getFirstName() + " " + e.getLastName()).trim()).orElse(null)
+									: null;
+							requesterName = (empName != null && !empName.isBlank()) ? empName : ua.getName();
 						}
 					}
 
@@ -303,10 +321,12 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 						String companyName = null;
 						String accountName = null;
 						if (d != null) {
-							companyName = companyRepo.findById(d.getCompanyId()).map(Company::getCompanyName)
-									.orElse(null);
-							accountName = accountRepo.findById(d.getAccountId()).map(Account::getAccountName)
-									.orElse(null);
+							companyName = d.getCompanyId() != null
+									? companyRepo.findById(d.getCompanyId()).map(Company::getCompanyName).orElse(null)
+									: null;
+							accountName = d.getAccountId() != null
+									? accountRepo.findById(d.getAccountId()).map(Account::getAccountName).orElse(null)
+									: null;
 							dto = toDto(rr, null, companyName, accountName, requesterName, requesterEmail);
 							dto.setProjectName(d.getProjectName());
 							dto.setCompanyId(d.getCompanyId());
@@ -318,7 +338,7 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 
 					} else if (rr.getProjectId() != null) {
 						Project p = projectRepo.findById(rr.getProjectId()).orElse(null);
-						String companyName = p == null ? null
+						String companyName = (p == null || p.getCompanyId() == null) ? null
 								: companyRepo.findById(p.getCompanyId()).map(Company::getCompanyName).orElse(null);
 						String accountName = (p == null || p.getAccountId() == null) ? null
 								: accountRepo.findById(p.getAccountId()).map(Account::getAccountName).orElse(null);
@@ -329,8 +349,10 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 						if (rr.getRequesterUserId() != null) {
 							userAccountRepo.findById(rr.getRequesterUserId()).ifPresent(ua -> {
 								dto.setCompanyId(ua.getCompanyId());
-								companyRepo.findById(ua.getCompanyId())
-										.ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
+								if (ua.getCompanyId() != null) {
+									companyRepo.findById(ua.getCompanyId())
+											.ifPresent(c -> dto.setCompanyName(c.getCompanyName()));
+								}
 							});
 						}
 					}
@@ -428,7 +450,7 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 		String accountName = (demand != null && demand.getAccountId() != null)
 				? accountRepo.findById(demand.getAccountId()).map(Account::getAccountName).orElse(null)
 				: null;
-		String companyName = (demand != null)
+		String companyName = (demand != null && demand.getCompanyId() != null)
 				? companyRepo.findById(demand.getCompanyId()).map(Company::getCompanyName).orElse(null)
 				: null;
 
@@ -485,9 +507,9 @@ public class ResourceRequestServiceImpl implements ResourceRequestService {
 		List<ResourceRequestSkill> rows = rrSkillRepo.findAllByRequestId(dto.getRequestId());
 
 		List<Long> primaryIds = rows.stream().filter(r -> "Primary".equalsIgnoreCase(r.getSkillType()))
-				.map(ResourceRequestSkill::getSkillId).toList();
+				.map(ResourceRequestSkill::getSkillId).filter(Objects::nonNull).toList();
 		List<Long> secondaryIds = rows.stream().filter(r -> "Secondary".equalsIgnoreCase(r.getSkillType()))
-				.map(ResourceRequestSkill::getSkillId).toList();
+				.map(ResourceRequestSkill::getSkillId).filter(Objects::nonNull).toList();
 
 		dto.setPrimarySkillIds(primaryIds);
 		dto.setSecondarySkillIds(secondaryIds);

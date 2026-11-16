@@ -204,8 +204,11 @@ public class UserAccountServiceImpl implements UserAccountService {
 		if (dto.getCompanyId() != null && !dto.getCompanyId().equals(existing.getCompanyId())) {
 			throw new IllegalArgumentException("companyId cannot be changed");
 		}
-		if (dto.getEmployeeId() != null && !dto.getEmployeeId().equals(existing.getEmployeeId())) {
-			throw new IllegalArgumentException("employeeId cannot be changed");
+		if (dto.getEmployeeId() != null) {
+			if (existing.getEmployeeId() != null && !dto.getEmployeeId().equals(existing.getEmployeeId())) {
+				throw new IllegalArgumentException("employeeId cannot be changed once assigned");
+			}
+			existing.setEmployeeId(dto.getEmployeeId());
 		}
 
 		// Replace roleIds with exactly what was sent (if any roles provided)

@@ -1713,12 +1713,16 @@ public class EmployeeServiceImpl implements EmployeeService {
 		dto.setPhoneNumber(phone.trim());
 		populatePrimaryContactFields(dto, phone.trim());
 
-		String roleValue = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
-				List.of("Role", "Role (Designation)", "Designation", "Department"));
-		if (roleValue == null || roleValue.isBlank())
-			throw new IllegalArgumentException("Required column 'Role' is missing or empty.");
+		String explicitDept = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Department", "Dept"));
+		String explicitRole = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
+				List.of("Role", "Role (Designation)", "Designation", "JobTitle", "Job Title"));
 
-		String deptName = roleValue.trim();
+		if ((explicitDept == null || explicitDept.isBlank()) && (explicitRole == null || explicitRole.isBlank()))
+			throw new IllegalArgumentException("Required column 'Role' or 'Department' is missing or empty.");
+
+		String deptName = (explicitDept != null && !explicitDept.isBlank()) ? explicitDept.trim()
+				: explicitRole.trim();
 		Long departmentId = departmentRepo.findByCompanyIdAndDepartmentNameIgnoreCase(companyId, deptName)
 				.map(Department::getDepartmentId).orElseGet(() -> {
 					log.info("Auto-creating new department '{}' for companyId {}", deptName, companyId);
@@ -1729,9 +1733,7 @@ public class EmployeeServiceImpl implements EmployeeService {
 				});
 		dto.setDepartmentId(departmentId);
 
-		String explicitJobTitle = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
-				List.of("JobTitle", "Job Title"));
-		String resolvedRoleTitle = (explicitJobTitle != null && !explicitJobTitle.isBlank()) ? explicitJobTitle : deptName;
+		String resolvedRoleTitle = (explicitRole != null && !explicitRole.isBlank()) ? explicitRole.trim() : deptName;
 		dto.setJobTitle(resolvedRoleTitle);
 		dto.setCurrentJobTitle(resolvedRoleTitle);
 
@@ -1766,10 +1768,16 @@ public class EmployeeServiceImpl implements EmployeeService {
 		}
 
 		String clientName = ImportResumeResolver.firstNonBlankValue(valueProvider, headerMap,
-				List.of("Client", "Account"));
+				List.of("Client", "Account", "Client Name", "Account Name"));
 		if (clientName != null && !clientName.isBlank()) {
 			Account acc = accountRepo.findByCompanyIdAndAccountNameIgnoreCase(companyId, clientName.trim())
-					.orElseThrow(() -> new IllegalArgumentException("Client not found for this company: " + clientName));
+					.orElseGet(() -> {
+						log.info("Auto-creating new client/account '{}' for companyId {}", clientName.trim(), companyId);
+						Account newAcc = new Account();
+						newAcc.setCompanyId(companyId);
+						newAcc.setAccountName(clientName.trim());
+						return accountRepo.save(newAcc);
+					});
 			dto.setCurrentAccountId(acc.getAccountId());
 		}
 

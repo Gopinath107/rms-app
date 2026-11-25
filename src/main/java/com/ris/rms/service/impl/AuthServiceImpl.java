@@ -7,6 +7,7 @@ import org.springframework.util.StringUtils;
 
 import com.ris.rms.dto.AuthUserDto;
 import com.ris.rms.entity.Company;
+import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.Role;
 import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.CompanyRepository;
@@ -71,12 +72,19 @@ public class AuthServiceImpl implements AuthService {
 		Long compId = (portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L;
 		List<Long> defaultRoles = resolveRmsRoles(portalUser);
 
+		Long targetCompId = (ua != null && ua.getCompanyId() != null && companyRepo.existsById(ua.getCompanyId()))
+				? ua.getCompanyId()
+				: compId;
+
+		// Ensure matching employee exists in rms.employee BEFORE saving user_account (satisfies fk_user_employee_company)
+		Long targetEmpId = resolveOrCreateEmployee(targetCompId, portalUser, authenticatedEmail, ua != null ? ua.getEmployeeId() : null);
+
 		if (ua == null) {
 			ua = new UserAccount();
 			ua.setEmail(authenticatedEmail);
 			ua.setName(portalUser.getFullName());
-			ua.setCompanyId(compId);
-			ua.setEmployeeId(portalUser.employeeId());
+			ua.setCompanyId(targetCompId);
+			ua.setEmployeeId(targetEmpId);
 			ua.setIsActive(true);
 			ua.setPasswordHash(portalUser.passwordHash());
 			ua.setRoleIds(defaultRoles);
@@ -84,11 +92,9 @@ public class AuthServiceImpl implements AuthService {
 		} else {
 			ua.setPasswordHash(portalUser.passwordHash());
 			ua.setIsActive(true);
-			if (portalUser.employeeId() != null) {
-				ua.setEmployeeId(portalUser.employeeId());
-			}
-			if (ua.getCompanyId() == null || !companyRepo.existsById(ua.getCompanyId())) {
-				ua.setCompanyId(compId);
+			ua.setCompanyId(targetCompId);
+			if (targetEmpId != null) {
+				ua.setEmployeeId(targetEmpId);
 			}
 			if (portalUser.getFullName() != null && !portalUser.getFullName().isBlank()) {
 				ua.setName(portalUser.getFullName());
@@ -97,14 +103,6 @@ public class AuthServiceImpl implements AuthService {
 				ua.setRoleIds(defaultRoles);
 			}
 			ua = userRepo.save(ua);
-		}
-
-		// Ensure employee exists in rms.employee table for FK constraints
-		Long empId = ua.getEmployeeId();
-		if (empId != null && !employeeRepo.existsById(empId)) {
-			String firstName = portalUser.firstName() != null ? portalUser.firstName() : "";
-			String lastName = portalUser.lastName() != null ? portalUser.lastName() : "";
-			employeeRepo.insertWithExplicitId(empId, ua.getCompanyId(), firstName, lastName, authenticatedEmail);
 		}
 
 		// Verify portal access strictly — never swallow AccessDeniedException
@@ -118,6 +116,7 @@ public class AuthServiceImpl implements AuthService {
 
 		companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).ifPresent(out::setCompanyName);
 
+		Long empId = ua.getEmployeeId();
 		String empName = null;
 		if (empId != null) {
 			var opt = employeeRepo.findById(empId);
@@ -157,6 +156,44 @@ public class AuthServiceImpl implements AuthService {
 		out.setToken(token);
 
 		return out;
+	}
+
+	private Long resolveOrCreateEmployee(
+			Long companyId,
+			RisPortalEmployeeService.PortalUserAuth portalUser,
+			String email,
+			Long existingUserEmpId) {
+		var byEmail = employeeRepo.findByCompanyIdAndEmailIgnoreCase(companyId, email);
+		if (byEmail.isPresent()) {
+			return byEmail.get().getEmployeeId();
+		}
+
+		String firstName = portalUser.firstName() != null && !portalUser.firstName().isBlank()
+				? portalUser.firstName().trim() : portalUser.getFullName();
+		String lastName = portalUser.lastName() != null ? portalUser.lastName().trim() : "";
+
+		Long portalEmpId = portalUser.employeeId();
+		if (portalEmpId != null && !employeeRepo.existsById(portalEmpId)) {
+			employeeRepo.insertWithExplicitId(portalEmpId, companyId, firstName, lastName, email);
+			return portalEmpId;
+		}
+
+		if (existingUserEmpId != null && employeeRepo.findById(existingUserEmpId)
+				.filter(e -> companyId.equals(e.getCompanyId())).isPresent()) {
+			return existingUserEmpId;
+		}
+
+		if (portalEmpId != null && employeeRepo.findById(portalEmpId)
+				.filter(e -> companyId.equals(e.getCompanyId())).isPresent()) {
+			return portalEmpId;
+		}
+
+		Employee created = new Employee();
+		created.setCompanyId(companyId);
+		created.setFirstName(firstName);
+		created.setLastName(lastName);
+		created.setEmail(email);
+		return employeeRepo.save(created).getEmployeeId();
 	}
 
 	private List<Long> resolveRmsRoles(RisPortalEmployeeService.PortalUserAuth portalUser) {

@@ -52,7 +52,11 @@ public class PortalAccessFilter extends OncePerRequestFilter {
             }
             var authentication = SecurityContextHolder.getContext().getAuthentication();
             if (authentication == null || !authentication.isAuthenticated()) throw new AccessDeniedException("Sign in with an RMS account authorized in RIS Portal");
-            var user = users.findByEmailIgnoreCase(authentication.getName()).filter(u -> Boolean.TRUE.equals(u.getIsActive()))
+            var localUser = users.findByEmailIgnoreCase(authentication.getName());
+            if (localUser.isPresent() && !Boolean.TRUE.equals(localUser.get().getIsActive())) {
+                throw new AccessDeniedException("RMS account is inactive");
+            }
+            var user = localUser.or(() -> client.resolvePortalUserAccount(authentication.getName()))
                     .orElseThrow(() -> new AccessDeniedException("RMS account is inactive"));
             PortalAccessClient.Access access = client.access(user);
             request.setAttribute(PortalAccessClient.Access.class.getName(), access);

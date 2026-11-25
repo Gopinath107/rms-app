@@ -51,6 +51,22 @@ public class PortalAccessClient {
         return Set.of();
     }
 
+    public Optional<UserAccount> resolvePortalUserAccount(String email) {
+        if (!properties.isEnabled() || risPortalEmployeeService == null) return Optional.empty();
+        return risPortalEmployeeService.findUserAuth(email)
+                .filter(u -> !Boolean.FALSE.equals(u.isActive()) && !Boolean.TRUE.equals(u.isLocked()) && u.employeeId() != null && u.hasRmsAccess())
+                .map(u -> {
+                    UserAccount ua = new UserAccount();
+                    ua.setUserId(u.userId());
+                    ua.setCompanyId(1L);
+                    ua.setEmployeeId(u.employeeId());
+                    ua.setEmail(u.email());
+                    ua.setName(u.getFullName());
+                    ua.setIsActive(true);
+                    return ua;
+                });
+    }
+
     public static class Unavailable extends RuntimeException {
         public Unavailable() { super("RIS Portal access verification is temporarily unavailable. Please retry."); }
     }

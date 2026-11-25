@@ -245,7 +245,7 @@ public class RisPortalEmployeeService {
 			return Optional.empty();
 		}
 		PortalUserAuth user = userOpt.get();
-		if (!user.hasRmsAccess()) {
+		if (Boolean.FALSE.equals(user.isActive()) || Boolean.TRUE.equals(user.isLocked()) || user.employeeId() == null || !user.hasRmsAccess()) {
 			return Optional.empty();
 		}
 

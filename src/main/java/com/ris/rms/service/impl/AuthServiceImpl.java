@@ -7,11 +7,9 @@ import org.springframework.util.StringUtils;
 
 import com.ris.rms.dto.AuthUserDto;
 import com.ris.rms.entity.Company;
-import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.Role;
 import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.CompanyRepository;
-import com.ris.rms.repository.EmployeeRepository;
 import com.ris.rms.repository.RoleRepository;
 import com.ris.rms.repository.UserAccountRepository;
 import com.ris.rms.security.JwtUtil;
@@ -40,7 +38,6 @@ public class AuthServiceImpl implements AuthService {
 
 	private final UserAccountRepository userRepo;
 	private final CompanyRepository companyRepo;
-	private final EmployeeRepository employeeRepo;
 	private final RoleRepository roleRepo;
 	private final JwtUtil jwtUtil;
 	private final PasswordHashUtil passwordHashUtil;
@@ -50,69 +47,66 @@ public class AuthServiceImpl implements AuthService {
 	private final RisPortalEmployeeService risPortalEmployeeService;
 
 	@Override
-	@Transactional(readOnly = false)
 	public AuthUserDto login(String email, String password, Long requestedRoleId) {
 		if (!StringUtils.hasText(email) || !StringUtils.hasText(password)) {
 			throw new IllegalArgumentException("email and password are required");
 		}
 
-		// Single-Source Identity: authenticate strictly against RIS Portal (hrms.user_account)
+		// Single-Source Identity: authenticate strictly against RIS Portal (hrms.user_account + hrms.employee)
 		RisPortalEmployeeService.PortalUserAuth portalUser = risPortalEmployeeService
 				.authenticate(email, password, passwordHashUtil)
 				.orElseThrow(() -> new IllegalArgumentException("Invalid RIS Portal credentials"));
+
+		// Only active RIS Portal employees can log into RMS
+		if (portalUser.employeeId() == null) {
+			throw new AccessDeniedException("Only active RIS Portal employees can log into RMS");
+		}
 
 		if (!portalUser.hasRmsAccess()) {
 			throw new AccessDeniedException("Your RMS access has not been granted or was removed in RIS Portal");
 		}
 
 		String authenticatedEmail = portalUser.email();
-		UserAccount ua = userRepo.findByEmailIgnoreCase(authenticatedEmail).orElse(null);
+		UserAccount existingUser = userRepo.findByEmailIgnoreCase(authenticatedEmail).orElse(null);
 
-		if (ua == null) {
-			// First-time RIS Portal user entering RMS: provision local RMS account without mutating existing users
-			Long portalCompId = portalUser.companyId();
-			Long targetCompId = (portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L;
-			Long targetEmpId = resolveOrCreateEmployee(targetCompId, portalUser, authenticatedEmail, null);
-
-			ua = new UserAccount();
-			ua.setEmail(authenticatedEmail);
-			ua.setName(portalUser.getFullName());
-			ua.setCompanyId(targetCompId);
-			ua.setEmployeeId(targetEmpId);
-			ua.setIsActive(true);
-			ua.setPasswordHash(portalUser.passwordHash());
-			ua.setRoleIds(resolveRmsRoles(portalUser));
-			ua = userRepo.save(ua);
-		} else if (Boolean.FALSE.equals(ua.getIsActive())) {
+		if (existingUser != null && Boolean.FALSE.equals(existingUser.getIsActive())) {
 			throw new IllegalArgumentException("User is inactive");
 		}
 
-		// Verify portal access strictly — never swallow AccessDeniedException
-		portalAccess.access(ua);
+		Long portalCompId = portalUser.companyId();
+		Long compId = (existingUser != null && existingUser.getCompanyId() != null)
+				? existingUser.getCompanyId()
+				: ((portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L);
+
+		Long userId = existingUser != null ? existingUser.getUserId() : portalUser.userId();
+		List<Long> myRoles = (existingUser != null && existingUser.getRoleIds() != null && !existingUser.getRoleIds().isEmpty())
+				? existingUser.getRoleIds()
+				: resolveRmsRoles(portalUser);
+
+		// Build in-memory verification context without inserting or updating rms.employee / rms.user_account
+		UserAccount accessCheckTarget = existingUser != null ? existingUser : new UserAccount();
+		if (existingUser == null) {
+			accessCheckTarget.setUserId(userId);
+			accessCheckTarget.setCompanyId(compId);
+			accessCheckTarget.setEmployeeId(portalUser.employeeId());
+			accessCheckTarget.setEmail(authenticatedEmail);
+			accessCheckTarget.setName(portalUser.getFullName());
+			accessCheckTarget.setIsActive(true);
+		}
+		portalAccess.access(accessCheckTarget);
 
 		AuthUserDto out = new AuthUserDto();
-		out.setUserId(ua.getUserId());
-		out.setCompanyId(ua.getCompanyId());
-		out.setEmail(ua.getEmail());
-		out.setIsActive(ua.getIsActive());
+		out.setUserId(userId);
+		out.setCompanyId(compId);
+		out.setEmail(authenticatedEmail);
+		out.setIsActive(true);
+		// Always use the authoritative RIS Portal employee_id and name
+		out.setEmployeeId(portalUser.employeeId());
+		out.setEmployeeName(portalUser.getFullName());
 
-		companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).ifPresent(out::setCompanyName);
+		companyRepo.findById(compId).map(Company::getCompanyName).ifPresent(out::setCompanyName);
 
-		Long empId = ua.getEmployeeId();
-		String empName = null;
-		if (empId != null) {
-			var opt = employeeRepo.findById(empId);
-			if (opt.isPresent()) {
-				empName = (opt.get().getFirstName() + " " + opt.get().getLastName()).trim();
-			}
-		}
-
-		out.setEmployeeId(empId);
-		out.setEmployeeName(empName != null && !empName.isBlank() ? empName : ua.getName());
-
-		List<Long> myRoles = ua.getRoleIds();
-		Long finalRoleId = null;
-
+		Long finalRoleId;
 		if (myRoles == null || myRoles.isEmpty()) {
 			if (requestedRoleId != null) {
 				throw new IllegalArgumentException("User has no roles assigned");
@@ -134,48 +128,10 @@ public class AuthServiceImpl implements AuthService {
 			roleRepo.findById(finalRoleId).map(Role::getRoleName).ifPresent(out::setRoleName);
 		}
 
-		String token = jwtUtil.generateToken(ua.getEmail(), ua.getEmail(), ua.getUserId());
+		String token = jwtUtil.generateToken(authenticatedEmail, authenticatedEmail, userId);
 		out.setToken(token);
 
 		return out;
-	}
-
-	private Long resolveOrCreateEmployee(
-			Long companyId,
-			RisPortalEmployeeService.PortalUserAuth portalUser,
-			String email,
-			Long existingUserEmpId) {
-		var byEmail = employeeRepo.findByCompanyIdAndEmailIgnoreCase(companyId, email);
-		if (byEmail.isPresent()) {
-			return byEmail.get().getEmployeeId();
-		}
-
-		String firstName = portalUser.firstName() != null && !portalUser.firstName().isBlank()
-				? portalUser.firstName().trim() : portalUser.getFullName();
-		String lastName = portalUser.lastName() != null ? portalUser.lastName().trim() : "";
-
-		Long portalEmpId = portalUser.employeeId();
-		if (portalEmpId != null && !employeeRepo.existsById(portalEmpId)) {
-			employeeRepo.insertWithExplicitId(portalEmpId, companyId, firstName, lastName, email);
-			return portalEmpId;
-		}
-
-		if (existingUserEmpId != null && employeeRepo.findById(existingUserEmpId)
-				.filter(e -> companyId.equals(e.getCompanyId())).isPresent()) {
-			return existingUserEmpId;
-		}
-
-		if (portalEmpId != null && employeeRepo.findById(portalEmpId)
-				.filter(e -> companyId.equals(e.getCompanyId())).isPresent()) {
-			return portalEmpId;
-		}
-
-		Employee created = new Employee();
-		created.setCompanyId(companyId);
-		created.setFirstName(firstName);
-		created.setLastName(lastName);
-		created.setEmail(email);
-		return employeeRepo.save(created).getEmployeeId();
 	}
 
 	private List<Long> resolveRmsRoles(RisPortalEmployeeService.PortalUserAuth portalUser) {

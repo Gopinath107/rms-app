@@ -7,11 +7,15 @@ import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -44,6 +48,7 @@ public class RisPortalEmployeeSyncService {
 	);
 
 	private final JdbcTemplate jdbc;
+	private TransactionTemplate syncTxTemplate;
 	private final AtomicLong lastSyncMs = new AtomicLong(0L);
 	private final Object syncLock = new Object();
 	private volatile Set<String> excludedEmails = Set.of();
@@ -59,6 +64,16 @@ public class RisPortalEmployeeSyncService {
 
 	public RisPortalEmployeeSyncService(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
+	}
+
+	@Autowired(required = false)
+	public void setTransactionManager(PlatformTransactionManager transactionManager) {
+		if (transactionManager != null) {
+			TransactionTemplate tpl = new TransactionTemplate(transactionManager);
+			tpl.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+			tpl.setReadOnly(false);
+			this.syncTxTemplate = tpl;
+		}
 	}
 
 	@EventListener(ApplicationReadyEvent.class)
@@ -181,40 +196,48 @@ public class RisPortalEmployeeSyncService {
 				return;
 			}
 
-			// Ensure department sequence is aligned before inserting missing departments
-			resetDepartmentSequence();
-			Map<String, Long> deptCache = loadDepartmentCache();
-
-			int inserted = 0;
-			int updated = 0;
-			for (DevEmployeeRow emp : devRows) {
-				Long deptId = resolveOrCreateDepartment(emp.departmentName(), deptCache);
-				Long existingIdByEmail = findEmployeeIdByEmail(emp.email());
-
-				if (existingIdByEmail != null) {
-					updateExistingEmployee(existingIdByEmail, emp, deptId);
-					updated++;
-				} else if (!employeeIdExists(emp.hrmsId())) {
-					insertEmployeeWithId(emp.hrmsId(), emp, deptId);
-					inserted++;
-				} else {
-					// If hrms.id collides with an unrelated local RMS row (e.g., dummy row 7), allocate a fresh sequence ID
-					resetEmployeeSequence();
-					Long nextId = jdbc.queryForObject("SELECT nextval('rms.employee_employee_id_seq')", Long.class);
-					insertEmployeeWithId(nextId, emp, deptId);
-					inserted++;
-				}
-			}
-
-			resetEmployeeSequence();
-			this.excludedEmails = Set.copyOf(nonDevOrInactiveEmails);
-			lastSyncMs.set(System.currentTimeMillis());
-
-			if (inserted > 0) {
-				log.info("RIS Portal -> RMS one-way sync complete: {} inserted, {} updated", inserted, updated);
+			if (syncTxTemplate != null) {
+				syncTxTemplate.executeWithoutResult(status -> applyLocalSync(devRows, nonDevOrInactiveEmails));
 			} else {
-				log.debug("RIS Portal -> RMS one-way sync complete: {} updated", updated);
+				applyLocalSync(devRows, nonDevOrInactiveEmails);
 			}
+		}
+	}
+
+	private void applyLocalSync(List<DevEmployeeRow> devRows, Set<String> nonDevOrInactiveEmails) {
+		// Ensure department sequence is aligned before inserting missing departments
+		resetDepartmentSequence();
+		Map<String, Long> deptCache = loadDepartmentCache();
+
+		int inserted = 0;
+		int updated = 0;
+		for (DevEmployeeRow emp : devRows) {
+			Long deptId = resolveOrCreateDepartment(emp.departmentName(), deptCache);
+			Long existingIdByEmail = findEmployeeIdByEmail(emp.email());
+
+			if (existingIdByEmail != null) {
+				updateExistingEmployee(existingIdByEmail, emp, deptId);
+				updated++;
+			} else if (!employeeIdExists(emp.hrmsId())) {
+				insertEmployeeWithId(emp.hrmsId(), emp, deptId);
+				inserted++;
+			} else {
+				// If hrms.id collides with an unrelated local RMS row (e.g., dummy row 7), allocate a fresh sequence ID
+				resetEmployeeSequence();
+				Long nextId = jdbc.queryForObject("SELECT nextval('rms.employee_employee_id_seq')", Long.class);
+				insertEmployeeWithId(nextId, emp, deptId);
+				inserted++;
+			}
+		}
+
+		resetEmployeeSequence();
+		this.excludedEmails = Set.copyOf(nonDevOrInactiveEmails);
+		lastSyncMs.set(System.currentTimeMillis());
+
+		if (inserted > 0) {
+			log.info("RIS Portal -> RMS one-way sync complete: {} inserted, {} updated", inserted, updated);
+		} else {
+			log.debug("RIS Portal -> RMS one-way sync complete: {} updated", updated);
 		}
 	}
 

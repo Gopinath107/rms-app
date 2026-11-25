@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -445,6 +446,34 @@ public class EmployeeController {
 		}
 	}
 
+	@PatchMapping("/{id}/status")
+	public ResponseEntity<Map<String, Object>> updateStatusPatch(@PathVariable Long id, @RequestParam String status) {
+		return doUpdateStatus(id, status);
+	}
+
+	@PutMapping("/{id}/status")
+	public ResponseEntity<Map<String, Object>> updateStatusPut(@PathVariable Long id, @RequestParam String status) {
+		return doUpdateStatus(id, status);
+	}
+
+	private ResponseEntity<Map<String, Object>> doUpdateStatus(Long id, String status) {
+		Map<String, Object> resp = new LinkedHashMap<>();
+		try {
+			EmployeeDto result = service.updateStatus(id, status);
+			resp.put("result", result);
+			resp.put("success", true);
+			resp.put("errors", List.of());
+			resp.put("errorCount", 0);
+			return ResponseEntity.ok(resp);
+		} catch (Exception e) {
+			resp.put("result", null);
+			resp.put("success", false);
+			resp.put("errors", List.of(cleanMsg(e)));
+			resp.put("errorCount", 1);
+			return ResponseEntity.badRequest().body(resp);
+		}
+	}
+
 	@GetMapping("/import-template")
 	public ResponseEntity<byte[]> downloadImportTemplate(@RequestParam(required = false) Long companyId) {
 		byte[] bytes = importTemplateService.generateTemplate("internal", companyId);
@@ -527,6 +556,30 @@ public class EmployeeController {
 		Map<String, Object> resp = new LinkedHashMap<>();
 		try {
 			ResumeShareDto result = service.shareResume(shareRequest);
+			resp.put("result", result);
+			resp.put("success", true);
+			resp.put("errors", List.of());
+			resp.put("errorCount", 0);
+			return ResponseEntity.ok().body(resp);
+		} catch (Exception e) {
+			resp.put("result", null);
+			resp.put("success", false);
+			resp.put("errors", List.of(cleanMsg(e)));
+			resp.put("errorCount", 1);
+			return ResponseEntity.badRequest().body(resp);
+		}
+	}
+
+	@DeleteMapping("/delete-share")
+	public ResponseEntity<Map<String, Object>> deleteShare(
+			@RequestParam Long employeeId,
+			@RequestParam(required = false) Long demandId,
+			@RequestParam(required = false) Long groupId,
+			@RequestParam(required = false, defaultValue = "demand") String type) {
+
+		Map<String, Object> resp = new LinkedHashMap<>();
+		try {
+			ResumeShareDto result = service.deleteShare(employeeId, demandId, groupId, type);
 			resp.put("result", result);
 			resp.put("success", true);
 			resp.put("errors", List.of());

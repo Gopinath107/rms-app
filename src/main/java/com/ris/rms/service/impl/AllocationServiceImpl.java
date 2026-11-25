@@ -96,6 +96,9 @@ public class AllocationServiceImpl implements AllocationService {
 		if (hasEmp) {
 			emp = employeeRepo.findById(dto.getEmployeeId())
 					.orElseThrow(() -> new IllegalArgumentException("Employee not found"));
+			if ("Inactive".equalsIgnoreCase(emp.getStatus())) {
+				throw new IllegalArgumentException("Cannot allocate project: Resource " + emp.getFirstName() + " " + emp.getLastName() + " is marked as Inactive.");
+			}
 			entityCompanyId = emp.getCompanyId();
 			entityIdForNotification = emp.getEmployeeId();
 			entityType = "Employee";
@@ -103,6 +106,9 @@ public class AllocationServiceImpl implements AllocationService {
 		} else {
 			cand = candidateRepo.findById(dto.getCandidateId())
 					.orElseThrow(() -> new IllegalArgumentException("Candidate not found"));
+			if ("Inactive".equalsIgnoreCase(cand.getStatus())) {
+				throw new IllegalArgumentException("Cannot allocate project: Resource " + cand.getFirstName() + " " + cand.getLastName() + " is marked as Inactive.");
+			}
 			entityCompanyId = cand.getCompanyId();
 			entityIdForNotification = cand.getCandidateId();
 			entityType = "Candidate";

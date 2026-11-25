@@ -4,8 +4,10 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.EmployeeDocument;
@@ -68,4 +70,18 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
 
 	boolean existsByCompanyIdAndPersonalemailidIgnoreCaseAndEmployeeIdNot(Long companyId, String personalEmailId,
 			Long employeeId);
+
+	@Modifying
+	@Transactional
+	@Query(value = """
+			INSERT INTO rms.employee (employee_id, company_id, first_name, last_name, email)
+			VALUES (:employeeId, :companyId, :firstName, :lastName, :email)
+			ON CONFLICT (employee_id) DO NOTHING
+			""", nativeQuery = true)
+	void insertWithExplicitId(
+			@Param("employeeId") Long employeeId,
+			@Param("companyId") Long companyId,
+			@Param("firstName") String firstName,
+			@Param("lastName") String lastName,
+			@Param("email") String email);
 }

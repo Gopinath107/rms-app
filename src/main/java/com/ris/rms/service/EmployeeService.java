@@ -31,4 +31,8 @@ public interface EmployeeService {
 	
 	ResumeShareDto shareResume(ResumeShareDto shareRequest) throws Exception;
 	
+	ResumeShareDto deleteShare(Long employeeId, Long demandId, Long groupId, String type) throws Exception;
+
+	EmployeeDto updateStatus(Long id, String status);
+	
 }

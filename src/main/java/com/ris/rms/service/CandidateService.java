@@ -24,10 +24,14 @@ public interface CandidateService {
 	
 	ResumeShareDto shareResume(ResumeShareDto request) throws Exception;
 
+	ResumeShareDto deleteShare(Long candidateId, Long demandId, Long groupId, String type) throws Exception;
+
     ResumeResource getResumeByCandidateId(Long candidateId) throws Exception;
 
     ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename) throws Exception;
 
     ImportResultDto importCandidates(Long companyId, InputStream inputStream, String filename, boolean overrideExisting) throws Exception;
+
+    CandidateDto updateStatus(Long id, String status);
 
 }

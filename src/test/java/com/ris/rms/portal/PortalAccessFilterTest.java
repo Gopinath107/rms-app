@@ -100,6 +100,14 @@ class PortalAccessFilterTest {
         assertThat(response.getStatus()).isEqualTo(403);
     }
 
+    @Test void publicEndpointsBypassPortalAccessCheck() throws Exception {
+        SecurityContextHolder.clearContext();
+        var request = new MockHttpServletRequest("GET", "/api/user-accounts/list");
+        AtomicBoolean called = new AtomicBoolean();
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> called.set(true));
+        assertThat(called).isTrue();
+    }
+
     @Test void integrationKeyIsReadOnlyAndCannotAuthorizeAWritingRequest() throws Exception {
         SecurityContextHolder.clearContext();
         var read = new MockHttpServletRequest("GET", "/api/demands/list"); read.addHeader("X-RIS-Integration-Key", "test-secret");

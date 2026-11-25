@@ -188,6 +188,10 @@ public class CandidateServiceImpl implements CandidateService {
 		Candidate candidate = candidateRepo.findById(candidateId)
 				.orElseThrow(() -> new IllegalArgumentException("Candidate not found: " + candidateId));
 
+		if ("Inactive".equalsIgnoreCase(candidate.getStatus())) {
+			throw new IllegalArgumentException("Cannot share resume: Resource " + candidate.getFirstName() + " " + candidate.getLastName() + " is marked as Inactive.");
+		}
+
 		String candidateName = ((candidate.getFirstName() == null ? "" : candidate.getFirstName()) + " "
 				+ (candidate.getLastName() == null ? "" : candidate.getLastName())).trim();
 
@@ -250,84 +254,152 @@ public class CandidateServiceImpl implements CandidateService {
 				Demand demand = demandRepo.findById(dId)
 						.orElseThrow(() -> new IllegalArgumentException("Demand not found: " + dId));
 
-				String dStatus = demand.getOverallStatus();
-				if ("Hold".equalsIgnoreCase(dStatus) || "Rejected".equalsIgnoreCase(dStatus)) {
-					throw new IllegalArgumentException("Demand '" + demand.getDemandtitle() + "' is in '" + dStatus
-							+ "' status . Cannot share resume.Change status to Open to continue");
-				}
-
-				// DB-backed duplicate check: same candidate already shared to same demand
-				if (rrRepo.existsByDemandIdAndCandidateId(dId, candidateId)) {
-					throw new IllegalArgumentException(
-							"Resume has already been shared for Demand: " + demand.getDemandtitle());
-				}
-
-				// JSONB history duplicate check (legacy)
-				boolean alreadySharedLegacy = history.stream().anyMatch(h -> "DEMAND".equals(h.get("type"))
-						&& h.get("demandId") instanceof Number && ((Number) h.get("demandId")).longValue() == dId
-						&& h.get("candidateId") instanceof Number);
-				if (alreadySharedLegacy) {
-					throw new IllegalArgumentException(
-							"Resume has already been shared for Demand: " + demand.getDemandtitle());
-				}
-
-				Company company = companyRepo.findById(demand.getCompanyId()).orElseThrow(
-						() -> new IllegalArgumentException("Company not found for demand: " + demand.getDemandid()));
-
-				String clientName = "Internal / No Account";
-				Long clientId = null;
-
-				if (demand.getAccountId() != null) {
-					Account account = accountRepo.findById(demand.getAccountId()).orElse(null);
-					if (account != null) {
-						clientName = account.getAccountName();
-						clientId = account.getAccountId();
-					}
-				}
-
-				// Create a ResourceRequest record linked to this candidate + demand
-				com.ris.rms.entity.ResourceRequest rr = new com.ris.rms.entity.ResourceRequest();
-				rr.setDemandId(dId);
-				rr.setCandidateId(candidateId);
-				rr.setResourceType("EXTERNAL");
-				rr.setRequesterUserId(request.getActionByUserId());
-				rr.setStatus("Submitted");
-				rr.setNumberOfResources(1);
-				com.ris.rms.entity.ResourceRequest savedRr = rrRepo.save(rr);
-				long createdRequestId = savedRr.getRequestId();
-
-				String emailSentTo = "Not sent";
-				if (shouldEmail && actionUser.getEmail() != null && !actionUser.getEmail().isBlank()) {
-					try {
-						emailService.sendResumeShareEmailAsync(actionUser.getEmail(), clientName, candidateName,
-								demand.getProjectName(), company.getCompanyName(), resumeResource);
-						emailSentTo = actionUser.getEmail();
-					} catch (Exception mailEx) {
-						emailSentTo = "Failed: " + mailEx.getMessage();
-					}
-				} else if (shouldEmail) {
-					emailSentTo = "Action User has no Email";
-				}
-
 				if (shouldEmail) {
-					demandService.updateDemandStatusOnResumeShare(demand.getDemandid());
-				}
+					String dStatus = demand.getOverallStatus();
+					if ("Hold".equalsIgnoreCase(dStatus) || "Rejected".equalsIgnoreCase(dStatus)) {
+						throw new IllegalArgumentException("Demand '" + demand.getDemandtitle() + "' is in '" + dStatus
+								+ "' status . Cannot share resume.Change status to Open to continue");
+					}
 
-				Map<String, Object> info = new LinkedHashMap<>();
-				info.put("type", "DEMAND");
-				info.put("demandId", demand.getDemandid());
-				info.put("demandTitle", demand.getDemandtitle());
-				info.put("requestId", createdRequestId);
-				info.put("candidateId", candidateId);
-				info.put("resourceType", "EXTERNAL");
-				info.put("projectName", demand.getProjectName());
-				info.put("clientId", clientId);
-				info.put("clientName", clientName);
-				info.put("emailSentTo", emailSentTo);
-				info.put("status", statusCode);
-				info.put("sharedAt",
-						ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
-				newShares.add(info);
+					// DB-backed duplicate check: same candidate already actively shared to same demand
+					List<com.ris.rms.entity.ResourceRequest> existingReqs = rrRepo.findAllByDemandId(dId).stream()
+							.filter(r -> Objects.equals(r.getCandidateId(), candidateId))
+							.toList();
+					boolean alreadyActive = existingReqs.stream().anyMatch(r -> !"Rejected".equalsIgnoreCase(r.getStatus()));
+					if (alreadyActive) {
+						throw new IllegalArgumentException(
+								"Resume has already been shared for Demand: " + demand.getDemandtitle());
+					}
+
+					// JSONB history duplicate check (legacy)
+					boolean alreadySharedLegacy = history.stream().anyMatch(h -> "DEMAND".equals(h.get("type"))
+							&& h.get("demandId") instanceof Number && ((Number) h.get("demandId")).longValue() == dId
+							&& "Shared".equalsIgnoreCase(String.valueOf(h.get("status"))));
+					if (alreadySharedLegacy) {
+						throw new IllegalArgumentException(
+								"Resume has already been shared for Demand: " + demand.getDemandtitle());
+					}
+
+					Company company = companyRepo.findById(demand.getCompanyId()).orElseThrow(
+							() -> new IllegalArgumentException("Company not found for demand: " + demand.getDemandid()));
+
+					String clientName = "Internal / No Account";
+					Long clientId = null;
+
+					if (demand.getAccountId() != null) {
+						Account account = accountRepo.findById(demand.getAccountId()).orElse(null);
+						if (account != null) {
+							clientName = account.getAccountName();
+							clientId = account.getAccountId();
+						}
+					}
+
+					// Create or reactivate ResourceRequest record linked to this candidate + demand
+					long createdRequestId;
+					if (!existingReqs.isEmpty()) {
+						com.ris.rms.entity.ResourceRequest rr = existingReqs.get(0);
+						rr.setStatus("Submitted");
+						rr.setRequesterUserId(request.getActionByUserId());
+						com.ris.rms.entity.ResourceRequest savedRr = rrRepo.save(rr);
+						createdRequestId = savedRr.getRequestId();
+					} else {
+						com.ris.rms.entity.ResourceRequest rr = new com.ris.rms.entity.ResourceRequest();
+						rr.setDemandId(dId);
+						rr.setCandidateId(candidateId);
+						rr.setResourceType("EXTERNAL");
+						rr.setRequesterUserId(request.getActionByUserId());
+						rr.setStatus("Submitted");
+						rr.setNumberOfResources(1);
+						com.ris.rms.entity.ResourceRequest savedRr = rrRepo.save(rr);
+						createdRequestId = savedRr.getRequestId();
+					}
+
+					String emailSentTo = "Not sent";
+					if (actionUser.getEmail() != null && !actionUser.getEmail().isBlank()) {
+						try {
+							emailService.sendResumeShareEmailAsync(actionUser.getEmail(), clientName, candidateName,
+									demand.getProjectName(), company.getCompanyName(), resumeResource);
+							emailSentTo = actionUser.getEmail();
+						} catch (Exception mailEx) {
+							emailSentTo = "Failed: " + mailEx.getMessage();
+						}
+					} else {
+						emailSentTo = "Action User has no Email";
+					}
+
+					demandService.updateDemandStatusOnResumeShare(demand.getDemandid());
+
+					boolean updatedInHistory = false;
+					for (Map<String, Object> h : history) {
+						if ("DEMAND".equals(h.get("type"))
+								&& h.get("demandId") instanceof Number
+								&& ((Number) h.get("demandId")).longValue() == dId) {
+							h.put("status", "Shared");
+							h.put("sharedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+							h.put("requestId", createdRequestId);
+							h.put("emailSentTo", emailSentTo);
+							h.put("clientId", clientId);
+							h.put("clientName", clientName);
+							h.put("projectName", demand.getProjectName());
+							updatedInHistory = true;
+							break;
+						}
+					}
+					if (!updatedInHistory) {
+						Map<String, Object> info = new LinkedHashMap<>();
+						info.put("type", "DEMAND");
+						info.put("demandId", demand.getDemandid());
+						info.put("demandTitle", demand.getDemandtitle());
+						info.put("requestId", createdRequestId);
+						info.put("candidateId", candidateId);
+						info.put("resourceType", "EXTERNAL");
+						info.put("projectName", demand.getProjectName());
+						info.put("clientId", clientId);
+						info.put("clientName", clientName);
+						info.put("emailSentTo", emailSentTo);
+						info.put("status", "Shared");
+						info.put("sharedAt",
+								ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+						newShares.add(info);
+					}
+				} else {
+					// REJECT: Update existing ResourceRequest(s) to "Rejected"
+					List<com.ris.rms.entity.ResourceRequest> existingReqs = rrRepo.findAllByDemandId(dId).stream()
+							.filter(r -> Objects.equals(r.getCandidateId(), candidateId))
+							.toList();
+					for (com.ris.rms.entity.ResourceRequest req : existingReqs) {
+						req.setStatus("Rejected");
+						rrRepo.save(req);
+					}
+
+					boolean updatedInHistory = false;
+					for (Map<String, Object> h : history) {
+						if ("DEMAND".equals(h.get("type"))
+								&& h.get("demandId") instanceof Number
+								&& ((Number) h.get("demandId")).longValue() == dId) {
+							h.put("status", "Rejected");
+							h.put("rejectedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+							h.put("actionByUserId", request.getActionByUserId());
+							h.put("actionByUserName", request.getActionByUserName());
+							updatedInHistory = true;
+							break;
+						}
+					}
+					if (!updatedInHistory) {
+						Map<String, Object> info = new LinkedHashMap<>();
+						info.put("type", "DEMAND");
+						info.put("demandId", demand.getDemandid());
+						info.put("demandTitle", demand.getDemandtitle());
+						info.put("candidateId", candidateId);
+						info.put("resourceType", "EXTERNAL");
+						info.put("projectName", demand.getProjectName());
+						info.put("status", "Rejected");
+						info.put("rejectedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+						info.put("actionByUserId", request.getActionByUserId());
+						info.put("actionByUserName", request.getActionByUserName());
+						newShares.add(info);
+					}
+				}
 			}
 		}
 
@@ -336,64 +408,117 @@ public class CandidateServiceImpl implements CandidateService {
 				if (groupId == null)
 					continue;
 
-				boolean alreadyShared = history.stream().anyMatch(h -> "GROUP".equals(h.get("type"))
-						&& h.get("groupId") instanceof Number && ((Number) h.get("groupId")).longValue() == groupId);
+				if (shouldEmail) {
+					boolean alreadyShared = history.stream().anyMatch(h -> "GROUP".equals(h.get("type"))
+							&& h.get("groupId") instanceof Number && ((Number) h.get("groupId")).longValue() == groupId
+							&& "Shared".equalsIgnoreCase(String.valueOf(h.get("status"))));
 
-				if (alreadyShared) {
-					throw new IllegalArgumentException(
-							"Resume has already been shared for Request Group ID: " + groupId);
-				}
-
-				ResourceRequestGroup group = resReqGroupRepo.findById(groupId)
-						.orElseThrow(() -> new IllegalArgumentException("Group not found: " + groupId));
-
-				Project project = projectRepo.findById(group.getProjectId())
-						.orElseThrow(() -> new IllegalArgumentException("Project not found for group: " + groupId));
-
-				if (project.getAccountId() == null) {
-					throw new IllegalArgumentException(
-							"Project " + project.getProjectId() + " is not linked to an Account.");
-				}
-
-				Account account = accountRepo.findById(project.getAccountId())
-						.orElseThrow(() -> new IllegalArgumentException(
-								"Client Account not found for project: " + project.getProjectId()));
-
-				Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
-						() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
-
-				String emailSentTo = "Not sent (Rejected)";
-				if (shouldEmail && account.getContactPersonEmail() != null
-						&& !account.getContactPersonEmail().isBlank()) {
-
-					try {
-						emailService.sendResumeShareEmailAsync(account.getContactPersonEmail(),
-								account.getAccountName(), candidateName, project.getProjectName(),
-								company.getCompanyName(), resumeResource);
-						emailSentTo = account.getContactPersonEmail();
-					} catch (Exception mailEx) {
-						emailSentTo = "Failed: " + mailEx.getMessage();
+					if (alreadyShared) {
+						throw new IllegalArgumentException(
+								"Resume has already been shared for Request Group ID: " + groupId);
 					}
-				} else if (shouldEmail) {
-					emailSentTo = "No Email on File";
-				}
 
-				Map<String, Object> info = new LinkedHashMap<>();
-				info.put("type", "GROUP");
-				info.put("groupId", groupId);
-				info.put("projectId", project.getProjectId());
-				info.put("projectName", project.getProjectName());
-				info.put("clientId", account.getAccountId());
-				info.put("clientName", account.getAccountName());
-				info.put("emailSentTo", emailSentTo);
-				info.put("status", statusCode);
-				info.put("sharedAt",
-						ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
-				newShares.add(info);
+					ResourceRequestGroup group = resReqGroupRepo.findById(groupId)
+							.orElseThrow(() -> new IllegalArgumentException("Group not found: " + groupId));
+
+					Project project = projectRepo.findById(group.getProjectId())
+							.orElseThrow(() -> new IllegalArgumentException("Project not found for group: " + groupId));
+
+					if (project.getAccountId() == null) {
+						throw new IllegalArgumentException(
+								"Project " + project.getProjectId() + " is not linked to an Account.");
+					}
+
+					Account account = accountRepo.findById(project.getAccountId())
+							.orElseThrow(() -> new IllegalArgumentException(
+									"Client Account not found for project: " + project.getProjectId()));
+
+					Company company = companyRepo.findById(project.getCompanyId()).orElseThrow(
+							() -> new IllegalArgumentException("Company not found for project: " + project.getProjectId()));
+
+					String emailSentTo = "Not sent";
+					if (account.getContactPersonEmail() != null
+							&& !account.getContactPersonEmail().isBlank()) {
+
+						try {
+							emailService.sendResumeShareEmailAsync(account.getContactPersonEmail(),
+									account.getAccountName(), candidateName, project.getProjectName(),
+									company.getCompanyName(), resumeResource);
+							emailSentTo = account.getContactPersonEmail();
+						} catch (Exception mailEx) {
+							emailSentTo = "Failed: " + mailEx.getMessage();
+						}
+					} else {
+						emailSentTo = "No Email on File";
+					}
+
+					boolean updatedInHistory = false;
+					for (Map<String, Object> h : history) {
+						if ("GROUP".equals(h.get("type"))
+								&& h.get("groupId") instanceof Number
+								&& ((Number) h.get("groupId")).longValue() == groupId) {
+							h.put("status", "Shared");
+							h.put("sharedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+							h.put("emailSentTo", emailSentTo);
+							h.put("clientId", account.getAccountId());
+							h.put("clientName", account.getAccountName());
+							h.put("projectId", project.getProjectId());
+							h.put("projectName", project.getProjectName());
+							updatedInHistory = true;
+							break;
+						}
+					}
+					if (!updatedInHistory) {
+						Map<String, Object> info = new LinkedHashMap<>();
+						info.put("type", "GROUP");
+						info.put("groupId", groupId);
+						info.put("projectId", project.getProjectId());
+						info.put("projectName", project.getProjectName());
+						info.put("clientId", account.getAccountId());
+						info.put("clientName", account.getAccountName());
+						info.put("emailSentTo", emailSentTo);
+						info.put("status", "Shared");
+						info.put("sharedAt",
+								ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+						newShares.add(info);
+					}
+				} else {
+					// REJECT / WITHDRAW for group
+					boolean updatedInHistory = false;
+					for (Map<String, Object> h : history) {
+						if ("GROUP".equals(h.get("type"))
+								&& h.get("groupId") instanceof Number
+								&& ((Number) h.get("groupId")).longValue() == groupId) {
+							h.put("status", "Rejected");
+							h.put("rejectedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+							h.put("actionByUserId", request.getActionByUserId());
+							h.put("actionByUserName", request.getActionByUserName());
+							updatedInHistory = true;
+							break;
+						}
+					}
+					if (!updatedInHistory) {
+						ResourceRequestGroup group = resReqGroupRepo.findById(groupId).orElse(null);
+						Map<String, Object> info = new LinkedHashMap<>();
+						info.put("type", "GROUP");
+						info.put("groupId", groupId);
+						if (group != null) {
+							info.put("projectId", group.getProjectId());
+						}
+						info.put("status", "Rejected");
+						info.put("rejectedAt", ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata")).toOffsetDateTime().toString());
+						info.put("actionByUserId", request.getActionByUserId());
+						info.put("actionByUserName", request.getActionByUserName());
+						newShares.add(info);
+					}
+				}
 			}
 		}
 
 		history.addAll(newShares);
+
+		boolean hasAnyActiveShare = history.stream().anyMatch(h -> "Shared".equalsIgnoreCase(String.valueOf(h.get("status"))));
+		String effectiveDocStatus = hasAnyActiveShare ? "Shared" : "Rejected";
 
 		Map<String, Object> meta = new LinkedHashMap<>();
 		meta.put("actionByUserId", request.getActionByUserId());
@@ -403,12 +528,91 @@ public class CandidateServiceImpl implements CandidateService {
 
 		String metaJson = OM.writeValueAsString(meta);
 
-		document.setResumeShareStatus(statusCode);
+		document.setResumeShareStatus(effectiveDocStatus);
 		document.setResumeShareMeta(metaJson);
 		candidateDocumentRepo.save(document);
 
+		request.setStatus(effectiveDocStatus);
+		request.setStatusSet(effectiveDocStatus);
 		request.setSharedWith(history);
 		return request;
+	}
+
+	@Override
+	public ResumeShareDto deleteShare(Long candidateId, Long demandId, Long groupId, String type) throws Exception {
+		if (candidateId == null) {
+			throw new IllegalArgumentException("Candidate ID is required.");
+		}
+
+		CandidateDocument document = candidateDocumentRepo.findPrimaryResume(candidateId)
+				.orElseThrow(() -> new IllegalArgumentException("No resume available for this candidate."));
+
+		List<Map<String, Object>> history = new ArrayList<>();
+		if (document.getResumeShareMeta() != null && !document.getResumeShareMeta().isBlank()) {
+			try {
+				Map<String, Object> oldMeta = OM.readValue(document.getResumeShareMeta(),
+						new TypeReference<Map<String, Object>>() {});
+				if (oldMeta.containsKey("sharedWith") && oldMeta.get("sharedWith") instanceof List) {
+					history = (List<Map<String, Object>>) oldMeta.get("sharedWith");
+				}
+			} catch (Exception e) {}
+		}
+
+		// Find target item
+		Map<String, Object> targetItem = null;
+		for (Map<String, Object> h : history) {
+			if ("opportunity".equalsIgnoreCase(type) || "group".equalsIgnoreCase(type)) {
+				if ("GROUP".equals(h.get("type")) && h.get("groupId") instanceof Number
+						&& ((Number) h.get("groupId")).longValue() == groupId) {
+					targetItem = h;
+					break;
+				}
+			} else {
+				if ("DEMAND".equals(h.get("type")) && h.get("demandId") instanceof Number
+						&& ((Number) h.get("demandId")).longValue() == demandId) {
+					targetItem = h;
+					break;
+				}
+			}
+		}
+
+		if (targetItem == null) {
+			throw new IllegalArgumentException("No share record found for the specified "
+					+ ("opportunity".equalsIgnoreCase(type) ? "opportunity" : "demand") + ".");
+		}
+
+		String currentStatus = String.valueOf(targetItem.get("status"));
+		if (!"Rejected".equalsIgnoreCase(currentStatus)) {
+			throw new IllegalArgumentException("Only rejected demands can be deleted. Please reject the demand first before deleting.");
+		}
+
+		history.remove(targetItem);
+
+		// Delete corresponding ResourceRequest records
+		if (demandId != null) {
+			List<com.ris.rms.entity.ResourceRequest> reqs = rrRepo.findAllByDemandId(demandId).stream()
+					.filter(r -> Objects.equals(r.getCandidateId(), candidateId))
+					.toList();
+			rrRepo.deleteAll(reqs);
+		}
+
+		boolean hasAnyActiveShare = history.stream().anyMatch(h -> "Shared".equalsIgnoreCase(String.valueOf(h.get("status"))));
+		boolean hasAnyRejectedShare = history.stream().anyMatch(h -> "Rejected".equalsIgnoreCase(String.valueOf(h.get("status"))));
+		String effectiveDocStatus = hasAnyActiveShare ? "Shared" : (hasAnyRejectedShare ? "Rejected" : null);
+
+		Map<String, Object> meta = new LinkedHashMap<>();
+		meta.put("sharedWith", history);
+		String metaJson = OM.writeValueAsString(meta);
+
+		document.setResumeShareStatus(effectiveDocStatus);
+		document.setResumeShareMeta(metaJson);
+		candidateDocumentRepo.save(document);
+
+		ResumeShareDto result = new ResumeShareDto();
+		result.setCandidateId(candidateId);
+		result.setStatus(effectiveDocStatus);
+		result.setSharedWith(history);
+		return result;
 	}
 
 	@Override
@@ -1529,5 +1733,20 @@ public class CandidateServiceImpl implements CandidateService {
 		}
 		int dot = name.lastIndexOf('.');
 		return (dot > 0 ? name.substring(0, dot) : name) + ext;
+	}
+
+	@Override
+	public CandidateDto updateStatus(Long id, String status) {
+		Candidate c = candidateRepo.findById(id)
+				.orElseThrow(() -> new IllegalArgumentException("Candidate not found with id: " + id));
+		if ("Allocated".equalsIgnoreCase(status) || "Billable".equalsIgnoreCase(status)) {
+			c.setStatus("isBillable");
+		} else if ("Not Allocated".equalsIgnoreCase(status)) {
+			c.setStatus("notAvailable");
+		} else {
+			c.setStatus(status);
+		}
+		candidateRepo.save(c);
+		return getById(id);
 	}
 }

@@ -37,7 +37,10 @@ public class PortalAccessFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
         String path = request.getRequestURI().substring(request.getContextPath().length());
         if (!properties.isEnabled() || !path.startsWith("/api/") || request.getMethod().equals("OPTIONS")
-                || path.startsWith("/api/auth/")) { chain.doFilter(request, response); return; }
+                || path.startsWith("/api/auth/")
+                || path.startsWith("/api/public/")
+                || path.startsWith("/api/user-accounts/list")
+                || path.startsWith("/api/user-activity/")) { chain.doFilter(request, response); return; }
         try {
             String key = request.getHeader("X-RIS-Integration-Key");
             if (key != null && !properties.getIntegrationKey().isBlank() && request.getMethod().equals("GET") && SERVICE_READS.contains(path)

@@ -68,18 +68,12 @@ public class AuthServiceImpl implements AuthService {
 		String authenticatedEmail = portalUser.email();
 		UserAccount ua = userRepo.findByEmailIgnoreCase(authenticatedEmail).orElse(null);
 
-		Long portalCompId = portalUser.companyId();
-		Long compId = (portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L;
-		List<Long> defaultRoles = resolveRmsRoles(portalUser);
-
-		Long targetCompId = (ua != null && ua.getCompanyId() != null && companyRepo.existsById(ua.getCompanyId()))
-				? ua.getCompanyId()
-				: compId;
-
-		// Ensure matching employee exists in rms.employee BEFORE saving user_account (satisfies fk_user_employee_company)
-		Long targetEmpId = resolveOrCreateEmployee(targetCompId, portalUser, authenticatedEmail, ua != null ? ua.getEmployeeId() : null);
-
 		if (ua == null) {
+			// First-time RIS Portal user entering RMS: provision local RMS account without mutating existing users
+			Long portalCompId = portalUser.companyId();
+			Long targetCompId = (portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L;
+			Long targetEmpId = resolveOrCreateEmployee(targetCompId, portalUser, authenticatedEmail, null);
+
 			ua = new UserAccount();
 			ua.setEmail(authenticatedEmail);
 			ua.setName(portalUser.getFullName());
@@ -87,22 +81,10 @@ public class AuthServiceImpl implements AuthService {
 			ua.setEmployeeId(targetEmpId);
 			ua.setIsActive(true);
 			ua.setPasswordHash(portalUser.passwordHash());
-			ua.setRoleIds(defaultRoles);
+			ua.setRoleIds(resolveRmsRoles(portalUser));
 			ua = userRepo.save(ua);
-		} else {
-			ua.setPasswordHash(portalUser.passwordHash());
-			ua.setIsActive(true);
-			ua.setCompanyId(targetCompId);
-			if (targetEmpId != null) {
-				ua.setEmployeeId(targetEmpId);
-			}
-			if (portalUser.getFullName() != null && !portalUser.getFullName().isBlank()) {
-				ua.setName(portalUser.getFullName());
-			}
-			if (ua.getRoleIds() == null || ua.getRoleIds().isEmpty()) {
-				ua.setRoleIds(defaultRoles);
-			}
-			ua = userRepo.save(ua);
+		} else if (Boolean.FALSE.equals(ua.getIsActive())) {
+			throw new IllegalArgumentException("User is inactive");
 		}
 
 		// Verify portal access strictly — never swallow AccessDeniedException

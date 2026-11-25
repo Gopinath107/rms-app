@@ -1,12 +1,12 @@
 package com.ris.rms.service.impl;
 
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.ris.rms.dto.AuthUserDto;
 import com.ris.rms.entity.Company;
-import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.Role;
 import com.ris.rms.entity.UserAccount;
 import com.ris.rms.repository.CompanyRepository;
@@ -24,7 +24,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
@@ -50,96 +49,68 @@ public class AuthServiceImpl implements AuthService {
 	private final RisPortalEmployeeService risPortalEmployeeService;
 
 	@Override
-	@Transactional(readOnly = false) // override class-level readOnly=true — login migrates password hash on write
+	@Transactional(readOnly = false)
 	public AuthUserDto login(String email, String password, Long requestedRoleId) {
 		if (!StringUtils.hasText(email) || !StringUtils.hasText(password)) {
 			throw new IllegalArgumentException("email and password are required");
 		}
 
-		UserAccount ua = null;
-		String authenticatedEmail = email.trim();
+		// Single-Source Identity: authenticate strictly against RIS Portal (hrms.user_account)
+		RisPortalEmployeeService.PortalUserAuth portalUser = risPortalEmployeeService
+				.authenticate(email, password, passwordHashUtil)
+				.orElseThrow(() -> new IllegalArgumentException("Invalid RIS Portal credentials"));
 
-		// 1. Primary Authentication: Single Source Identity via RIS Portal
-		if (risPortalEmployeeService != null) {
-			Optional<RisPortalEmployeeService.PortalUserAuth> portalAuthOpt =
-					risPortalEmployeeService.authenticate(email, password, passwordHashUtil);
-
-			if (portalAuthOpt.isPresent()) {
-				RisPortalEmployeeService.PortalUserAuth portalUser = portalAuthOpt.get();
-
-				if (!portalUser.hasRmsAccess()) {
-					throw new org.springframework.security.access.AccessDeniedException(
-							"Your account is not authorized for RMS in RIS Portal. Please contact your administrator."
-					);
-				}
-
-				authenticatedEmail = portalUser.email();
-				ua = userRepo.findByEmailIgnoreCase(authenticatedEmail).orElse(null);
-
-				Long rmsRoleId = mapPortalRoleToRmsRoleId(portalUser.roles());
-				Long compId = portalUser.companyId() != null ? portalUser.companyId() : 1L;
-
-				if (ua == null) {
-					ua = new UserAccount();
-					ua.setEmail(authenticatedEmail);
-					ua.setName(portalUser.getFullName());
-					ua.setCompanyId(compId);
-					ua.setEmployeeId(portalUser.employeeId());
-					ua.setIsActive(true);
-					ua.setPasswordHash(portalUser.passwordHash());
-					ua.setRoleIds(List.of(rmsRoleId));
-					ua = userRepo.save(ua);
-				} else {
-					ua.setPasswordHash(portalUser.passwordHash());
-					if (portalUser.employeeId() != null) ua.setEmployeeId(portalUser.employeeId());
-					if (portalUser.companyId() != null) ua.setCompanyId(portalUser.companyId());
-					if (portalUser.getFullName() != null && !portalUser.getFullName().isBlank()) {
-						ua.setName(portalUser.getFullName());
-					}
-					if (ua.getRoleIds() == null || ua.getRoleIds().isEmpty()) {
-						ua.setRoleIds(List.of(rmsRoleId));
-					}
-					ua = userRepo.save(ua);
-				}
-
-				// Ensure employee exists in rms.employee table for FK constraints
-				Long empId = ua.getEmployeeId();
-				if (empId != null && !employeeRepo.existsById(empId)) {
-					String firstName = portalUser.firstName() != null ? portalUser.firstName() : "";
-					String lastName = portalUser.lastName() != null ? portalUser.lastName() : "";
-					employeeRepo.insertWithExplicitId(empId, compId, firstName, lastName, authenticatedEmail);
-				}
-			}
+		if (!portalUser.hasRmsAccess()) {
+			throw new AccessDeniedException("Your RMS access has not been granted or was removed in RIS Portal");
 		}
 
-		// 2. Fallback Authentication: Local RMS database (for backward-compatibility)
+		String authenticatedEmail = portalUser.email();
+		UserAccount ua = userRepo.findByEmailIgnoreCase(authenticatedEmail).orElse(null);
+
+		Long portalCompId = portalUser.companyId();
+		Long compId = (portalCompId != null && companyRepo.existsById(portalCompId)) ? portalCompId : 1L;
+		List<Long> defaultRoles = resolveRmsRoles(portalUser);
+
 		if (ua == null) {
-			ua = userRepo.findByEmailIgnoreCase(email)
-					.orElseThrow(() -> new IllegalArgumentException("Invalid credentials"));
-
-			if (ua.getIsActive() == null || !ua.getIsActive()) {
-				throw new IllegalArgumentException("User is inactive");
+			ua = new UserAccount();
+			ua.setEmail(authenticatedEmail);
+			ua.setName(portalUser.getFullName());
+			ua.setCompanyId(compId);
+			ua.setEmployeeId(portalUser.employeeId());
+			ua.setIsActive(true);
+			ua.setPasswordHash(portalUser.passwordHash());
+			ua.setRoleIds(defaultRoles);
+			ua = userRepo.save(ua);
+		} else {
+			ua.setPasswordHash(portalUser.passwordHash());
+			ua.setIsActive(true);
+			if (portalUser.employeeId() != null) {
+				ua.setEmployeeId(portalUser.employeeId());
 			}
-
-			String stored = ua.getPasswordHash();
-			if (!passwordHashUtil.verifyPassword(password, stored)) {
-				throw new IllegalArgumentException("Invalid credentials");
+			if (ua.getCompanyId() == null || !companyRepo.existsById(ua.getCompanyId())) {
+				ua.setCompanyId(compId);
 			}
-
-			// BCrypt migration: if stored password is not BCrypt, re-hash and save on login
-			if (stored != null && !stored.startsWith("$2")) {
-				ua.setPasswordHash(passwordHashUtil.hashPassword(password));
-				userRepo.save(ua);
+			if (portalUser.getFullName() != null && !portalUser.getFullName().isBlank()) {
+				ua.setName(portalUser.getFullName());
 			}
+			if (ua.getRoleIds() == null || ua.getRoleIds().isEmpty()) {
+				ua.setRoleIds(defaultRoles);
+			}
+			ua = userRepo.save(ua);
 		}
+
+		// Ensure employee exists in rms.employee table for FK constraints
+		Long empId = ua.getEmployeeId();
+		if (empId != null && !employeeRepo.existsById(empId)) {
+			String firstName = portalUser.firstName() != null ? portalUser.firstName() : "";
+			String lastName = portalUser.lastName() != null ? portalUser.lastName() : "";
+			employeeRepo.insertWithExplicitId(empId, ua.getCompanyId(), firstName, lastName, authenticatedEmail);
+		}
+
+		// Verify portal access strictly — never swallow AccessDeniedException
+		portalAccess.access(ua);
 
 		AuthUserDto out = new AuthUserDto();
-		try {
-			portalAccess.access(ua);
-		} catch (Exception e) {
-			log.debug("Portal access check: {}", e.getMessage());
-		}
-
 		out.setUserId(ua.getUserId());
 		out.setCompanyId(ua.getCompanyId());
 		out.setEmail(ua.getEmail());
@@ -147,35 +118,11 @@ public class AuthServiceImpl implements AuthService {
 
 		companyRepo.findById(ua.getCompanyId()).map(Company::getCompanyName).ifPresent(out::setCompanyName);
 
-		Long empId = ua.getEmployeeId();
 		String empName = null;
-
 		if (empId != null) {
 			var opt = employeeRepo.findById(empId);
 			if (opt.isPresent()) {
 				empName = (opt.get().getFirstName() + " " + opt.get().getLastName()).trim();
-			}
-		}
-
-		// If user_account does not have an employeeId yet, resolve from RIS Portal by email
-		if (empId == null && risPortalEmployeeService != null) {
-			var portalEmpOpt = risPortalEmployeeService.findEmployeeByEmail(ua.getEmail());
-			if (portalEmpOpt.isPresent()) {
-				var portalEmp = portalEmpOpt.get();
-				empId = portalEmp.employeeId();
-				empName = portalEmp.getFullName();
-
-				if (!employeeRepo.existsById(empId)) {
-					String firstName = portalEmp.firstName() != null ? portalEmp.firstName() : "";
-					String lastName = portalEmp.lastName() != null ? portalEmp.lastName() : "";
-					employeeRepo.insertWithExplicitId(empId, ua.getCompanyId(), firstName, lastName, portalEmp.email());
-				}
-
-				ua.setEmployeeId(empId);
-				if (ua.getName() == null || ua.getName().isBlank()) {
-					ua.setName(empName);
-				}
-				userRepo.save(ua);
 			}
 		}
 
@@ -189,18 +136,16 @@ public class AuthServiceImpl implements AuthService {
 			if (requestedRoleId != null) {
 				throw new IllegalArgumentException("User has no roles assigned");
 			}
-			finalRoleId = 3L; // Default PMO
-		} else {
-			if (requestedRoleId != null) {
-				if (myRoles.contains(requestedRoleId)) {
-					finalRoleId = requestedRoleId;
-				} else {
-					throw new IllegalArgumentException(
-							"User is not authorized for the requested role ID: " + requestedRoleId);
-				}
+			finalRoleId = 3L;
+		} else if (requestedRoleId != null) {
+			if (myRoles.contains(requestedRoleId)) {
+				finalRoleId = requestedRoleId;
 			} else {
-				finalRoleId = myRoles.get(0);
+				throw new IllegalArgumentException(
+						"User is not authorized for the requested role ID: " + requestedRoleId);
 			}
+		} else {
+			finalRoleId = myRoles.get(0);
 		}
 
 		if (finalRoleId != null) {
@@ -214,39 +159,46 @@ public class AuthServiceImpl implements AuthService {
 		return out;
 	}
 
+	private List<Long> resolveRmsRoles(RisPortalEmployeeService.PortalUserAuth portalUser) {
+		if (portalUser.isSuperAdmin() || (portalUser.rmsPermissions() != null && portalUser.rmsPermissions().contains("RMS_ADMIN"))) {
+			return List.of(6L, 1L, 2L, 3L, 4L, 5L, 7L);
+		}
+		return List.of(mapPortalRoleToRmsRoleId(portalUser.roles()));
+	}
+
 	private Long mapPortalRoleToRmsRoleId(List<String> portalRoles) {
 		if (portalRoles == null || portalRoles.isEmpty()) {
-			return 3L; // PMO default
+			return 3L;
 		}
 		for (String r : portalRoles) {
 			String upper = r.toUpperCase();
 			if (upper.contains("SUPER_ADMIN") || upper.contains("IT_ADMIN") || upper.contains("SYSTEM_ADMIN")) {
-				return 6L; // system-admin
+				return 6L;
 			}
 			if (upper.contains("HR")) {
-				return 1L; // hr
+				return 1L;
 			}
 			if (upper.contains("PMO")) {
-				return 3L; // pmo
+				return 3L;
 			}
 			if (upper.contains("PROJECT_MANAGER") || upper.contains("MANAGER")) {
-				return 2L; // Project Manager
+				return 2L;
 			}
 			if (upper.contains("PORTFOLIO")) {
-				return 4L; // portfolio-manager
+				return 4L;
 			}
 			if (upper.contains("SALES")) {
-				return 5L; // sales-manager
+				return 5L;
 			}
 			if (upper.contains("INTERVIEW") || upper.contains("PANEL")) {
-				return 7L; // interview-panel
+				return 7L;
 			}
 		}
 		return 3L;
 	}
 
 	@Override
-	@Transactional(readOnly = false) // override class-level readOnly=true
+	@Transactional(readOnly = false)
 	public void generateAndSendOtp(String email) {
 		UserAccount ua = userRepo.findByEmailIgnoreCase(email)
 				.orElseThrow(() -> new IllegalArgumentException("No account found with this email address."));
@@ -290,7 +242,7 @@ public class AuthServiceImpl implements AuthService {
 	}
 
 	@Override
-	@Transactional(readOnly = false) // override class-level readOnly=true — must write password to DB
+	@Transactional(readOnly = false)
 	public void resetPassword(String email, String otp, String newPassword) {
 		if (!StringUtils.hasText(newPassword) || newPassword.length() < 6) {
 			throw new IllegalArgumentException("Password must be at least 6 characters long.");

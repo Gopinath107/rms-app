@@ -2,6 +2,7 @@ package com.ris.rms.portal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ris.rms.entity.UserAccount;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PortalAccessClient {
     private final PortalAccessProperties properties;
     private final RisPortalEmployeeService risPortalEmployeeService;
+    private RisPortalEmployeeSyncService risPortalEmployeeSyncService;
     private final Map<Long, Cached> cache = new ConcurrentHashMap<>();
 
     public record Access(long portalUserId, long portalEmployeeId, Set<String> permissions, Set<Long> companyIds) { }
@@ -21,6 +23,11 @@ public class PortalAccessClient {
     public PortalAccessClient(PortalAccessProperties properties, RisPortalEmployeeService risPortalEmployeeService) {
         this.properties = properties;
         this.risPortalEmployeeService = risPortalEmployeeService;
+    }
+
+    @Autowired(required = false)
+    public void setRisPortalEmployeeSyncService(RisPortalEmployeeSyncService risPortalEmployeeSyncService) {
+        this.risPortalEmployeeSyncService = risPortalEmployeeSyncService;
     }
 
     public Access access(UserAccount user) {
@@ -44,6 +51,9 @@ public class PortalAccessClient {
     }
 
     public Set<Long> eligible(long companyId) {
+        if (risPortalEmployeeSyncService != null) {
+            return risPortalEmployeeSyncService.getEligibleEmployeeIds(companyId);
+        }
         Set<Long> ids = risPortalEmployeeService.getEligibleInternalEmployees(companyId);
         if (!ids.isEmpty()) {
             return ids;

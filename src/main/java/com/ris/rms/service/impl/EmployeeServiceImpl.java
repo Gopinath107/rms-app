@@ -382,7 +382,11 @@ public class EmployeeServiceImpl implements EmployeeService {
 				fallbackClient = accountRepo.findById(fallbackAccountId).map(Account::getAccountName).orElse(null);
 			}
 			dto.setProjectHistory(hist != null ? hist : List.of());
-			dto.setCurrentClient(currentClientByEmp.getOrDefault(e.getEmployeeId(), fallbackClient != null ? fallbackClient : "N/A"));
+			String computedClient = currentClientByEmp.get(e.getEmployeeId());
+			if ((computedClient == null || computedClient.isBlank() || "N/A".equalsIgnoreCase(computedClient)) && fallbackClient != null) {
+				computedClient = fallbackClient;
+			}
+			dto.setCurrentClient(computedClient != null ? computedClient : "N/A");
 			dto.setCurrentProject(currentProjectByEmp.getOrDefault(e.getEmployeeId(), "N/A"));
 			dto.setCurrentProjectId(currentProjectIdByEmp.getOrDefault(e.getEmployeeId(), fallbackProjectId));
 			dto.setCurrentAccountId(currentAccountIdByEmp.getOrDefault(e.getEmployeeId(), fallbackAccountId));
@@ -1661,6 +1665,14 @@ public class EmployeeServiceImpl implements EmployeeService {
 		// Skills JSON
 		dto.setPrimarySkills(jsonToList(e.getPrimarySkillsJson()));
 		dto.setSecondarySkills(jsonToList(e.getSecondarySkillsJson()));
+		if (dto.getSkills() == null || dto.getSkills().isEmpty()) {
+			List<String> combined = new ArrayList<>();
+			if (dto.getPrimarySkills() != null) combined.addAll(dto.getPrimarySkills());
+			if (dto.getSecondarySkills() != null) combined.addAll(dto.getSecondarySkills());
+			if (!combined.isEmpty()) {
+				dto.setSkills(combined.stream().distinct().toList());
+			}
+		}
 		dto.setSuggestedKeywords(e.getSuggestedKeywords());
 		// Social links JSON
 		dto.setSocialLinks(jsonToMapList(e.getSocialLinksJson()));
@@ -1747,10 +1759,15 @@ public class EmployeeServiceImpl implements EmployeeService {
 		if (json == null || json.isBlank())
 			return null;
 		try {
-			return OM.readValue(json, List.class);
-		} catch (Exception ex) {
-			return null;
+			if (json.trim().startsWith("[")) {
+				return OM.readValue(json, List.class);
+			}
+		} catch (Exception ignored) {
 		}
+		return Arrays.stream(json.split("[,;|]"))
+				.map(String::trim)
+				.filter(s -> !s.isEmpty())
+				.toList();
 	}
 
 	@SuppressWarnings("unchecked")

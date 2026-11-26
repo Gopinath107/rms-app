@@ -4,6 +4,8 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -124,8 +126,9 @@ public class RisPortalEmployeeSyncService {
 			String sql = """
 					SELECT e.id, e.first_name, e.last_name, e.official_email, e.personal_email,
 					       e.phone, e.gender, e.date_of_joining, e.employment_type,
-					       e.resource_status, e.is_active, e.is_deleted,
-					       e.highest_qualification, e.primary_skills, e.secondary_skills,
+					       e.resource_status, e.resource_sub_status, e.is_active, e.is_deleted,
+					       e.highest_qualification, e.primary_skills, e.secondary_skills, e.skills,
+					       e.experience_override_months, e.ug_graduation_date, e.graduation_date,
 					       e.city, e.state, e.nationality, e.pin_code,
 					       e.previous_employer, d.department_name, des.designation_name
 					FROM hrms.employee e
@@ -168,6 +171,36 @@ public class RisPortalEmployeeSyncService {
 							: (personalEmail != null ? personalEmail : "ris-emp-" + hrmsId + "@rudhrainfosolutions.com");
 					String mappedPersonal = (personalEmail != null && !personalEmail.equalsIgnoreCase(email)) ? personalEmail : null;
 
+					String rawPrimary = trimToNull(rs.getString("primary_skills"));
+					String rawSkills = trimToNull(rs.getString("skills"));
+					String primarySkills = rawPrimary != null ? rawPrimary : rawSkills;
+					String secondarySkills = trimToNull(rs.getString("secondary_skills"));
+
+					String subStatus = trimToNull(rs.getString("resource_sub_status"));
+					String clientName = null;
+					if ("BILLABLE".equalsIgnoreCase(resStatus) && subStatus != null) {
+						clientName = formatClientName(subStatus);
+					}
+
+					Integer expYears = null;
+					Object expOverride = rs.getObject("experience_override_months");
+					if (expOverride instanceof Number n) {
+						int m = n.intValue();
+						expYears = m >= 12 ? (int) Math.round((double) m / 12.0) : (m > 0 ? 1 : 0);
+					} else {
+						java.sql.Date ugGrad = rs.getDate("ug_graduation_date");
+						java.sql.Date grad = rs.getDate("graduation_date");
+						java.sql.Date effectiveGrad = ugGrad != null ? ugGrad : grad;
+						if (effectiveGrad != null) {
+							LocalDate gradDate = effectiveGrad.toLocalDate();
+							LocalDate today = LocalDate.now();
+							if (!gradDate.isAfter(today)) {
+								long months = ChronoUnit.MONTHS.between(gradDate, today);
+								expYears = months >= 12 ? (int) Math.round((double) months / 12.0) : (months > 0 ? 1 : 0);
+							}
+						}
+					}
+
 					devRows.add(new DevEmployeeRow(
 							hrmsId,
 							truncate(nonBlank(rs.getString("first_name"), "Employee"), 100),
@@ -180,15 +213,17 @@ public class RisPortalEmployeeSyncService {
 							mapEmploymentType(rs.getString("employment_type")),
 							mapStatus(resStatus),
 							truncate(trimToNull(rs.getString("highest_qualification")), 100),
-							trimToNull(rs.getString("primary_skills")),
-							trimToNull(rs.getString("secondary_skills")),
+							primarySkills,
+							secondarySkills,
 							truncate(trimToNull(rs.getString("city")), 100),
 							truncate(trimToNull(rs.getString("state")), 100),
 							truncate(trimToNull(rs.getString("nationality")), 100),
 							truncate(trimToNull(rs.getString("pin_code")), 20),
 							truncate(trimToNull(rs.getString("previous_employer")), 255),
 							deptName,
-							truncate(trimToNull(rs.getString("designation_name")), 255)
+							truncate(trimToNull(rs.getString("designation_name")), 255),
+							expYears,
+							clientName
 					));
 				}
 			} catch (Exception e) {
@@ -208,24 +243,26 @@ public class RisPortalEmployeeSyncService {
 		// Ensure department sequence is aligned before inserting missing departments
 		resetDepartmentSequence();
 		Map<String, Long> deptCache = loadDepartmentCache();
+		Map<String, Long> accountCache = loadAccountCache();
 
 		int inserted = 0;
 		int updated = 0;
 		for (DevEmployeeRow emp : devRows) {
 			Long deptId = resolveOrCreateDepartment(emp.departmentName(), deptCache);
+			Long clientAccountId = emp.clientName() != null ? resolveOrCreateAccount(emp.clientName(), accountCache) : null;
 			Long existingIdByEmail = findEmployeeIdByEmail(emp.email());
 
 			if (existingIdByEmail != null) {
-				updateExistingEmployee(existingIdByEmail, emp, deptId);
+				updateExistingEmployee(existingIdByEmail, emp, deptId, clientAccountId);
 				updated++;
 			} else if (!employeeIdExists(emp.hrmsId())) {
-				insertEmployeeWithId(emp.hrmsId(), emp, deptId);
+				insertEmployeeWithId(emp.hrmsId(), emp, deptId, clientAccountId);
 				inserted++;
 			} else {
 				// If hrms.id collides with an unrelated local RMS row (e.g., dummy row 7), allocate a fresh sequence ID
 				resetEmployeeSequence();
 				Long nextId = jdbc.queryForObject("SELECT nextval('rms.employee_employee_id_seq')", Long.class);
-				insertEmployeeWithId(nextId, emp, deptId);
+				insertEmployeeWithId(nextId, emp, deptId, clientAccountId);
 				inserted++;
 			}
 		}
@@ -239,6 +276,37 @@ public class RisPortalEmployeeSyncService {
 		} else {
 			log.debug("RIS Portal -> RMS one-way sync complete: {} updated", updated);
 		}
+	}
+
+	private Map<String, Long> loadAccountCache() {
+		Map<String, Long> cache = new HashMap<>();
+		List<Map<String, Object>> rows = jdbc.queryForList(
+				"SELECT account_id, account_name FROM rms.account WHERE company_id = ?", RMS_COMPANY_ID);
+		for (Map<String, Object> row : rows) {
+			String name = row.get("account_name") != null ? row.get("account_name").toString().trim() : null;
+			if (name != null && !name.isEmpty()) {
+				cache.put(name.toLowerCase(Locale.ROOT), ((Number) row.get("account_id")).longValue());
+			}
+		}
+		return cache;
+	}
+
+	private Long resolveOrCreateAccount(String clientName, Map<String, Long> accountCache) {
+		if (clientName == null || clientName.isBlank()) {
+			return null;
+		}
+		String key = clientName.toLowerCase(Locale.ROOT);
+		Long existing = accountCache.get(key);
+		if (existing != null) {
+			return existing;
+		}
+		Long newId = jdbc.queryForObject(
+				"INSERT INTO rms.account (company_id, account_name) VALUES (?, ?) RETURNING account_id",
+				Long.class, RMS_COMPANY_ID, truncate(clientName, 150));
+		if (newId != null) {
+			accountCache.put(key, newId);
+		}
+		return newId;
 	}
 
 	private Map<String, Long> loadDepartmentCache() {
@@ -284,7 +352,7 @@ public class RisPortalEmployeeSyncService {
 		return cnt != null && cnt > 0;
 	}
 
-	private void insertEmployeeWithId(long employeeId, DevEmployeeRow emp, Long deptId) {
+	private void insertEmployeeWithId(long employeeId, DevEmployeeRow emp, Long deptId, Long clientAccountId) {
 		String safePersonal = isPersonalEmailAvailable(emp.personalEmail(), null) ? emp.personalEmail() : null;
 		jdbc.update("""
 				INSERT INTO rms.employee (
@@ -292,18 +360,18 @@ public class RisPortalEmployeeSyncService {
 				    phone_number, primary_contact_no, gender, joining_date, employment_type, status,
 				    department_id, job_title, current_job_title, highest_qualification,
 				    primary_skills, secondary_skills, location, city, state, country, zip_code,
-				    most_recent_employer, createddt, updateddt
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+				    most_recent_employer, experience_years, total_experience, current_account_id, createddt, updateddt
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
 				""",
 				employeeId, RMS_COMPANY_ID, emp.firstName(), emp.lastName(), emp.email(), safePersonal,
 				emp.phone(), truncate(emp.phone(), 30), emp.gender(), emp.joiningDate(), emp.employmentType(), emp.status(),
 				deptId, emp.jobTitle(), emp.jobTitle(), emp.highestQualification(),
 				emp.primarySkills(), emp.secondarySkills(), emp.city(), emp.city(), emp.state(), emp.country(), emp.zipCode(),
-				emp.previousEmployer()
+				emp.previousEmployer(), emp.experienceYears(), emp.experienceYears(), clientAccountId
 		);
 	}
 
-	private void updateExistingEmployee(long employeeId, DevEmployeeRow emp, Long deptId) {
+	private void updateExistingEmployee(long employeeId, DevEmployeeRow emp, Long deptId, Long clientAccountId) {
 		String safePersonal = isPersonalEmailAvailable(emp.personalEmail(), employeeId) ? emp.personalEmail() : null;
 		jdbc.update("""
 				UPDATE rms.employee SET
@@ -328,6 +396,9 @@ public class RisPortalEmployeeSyncService {
 				    country = COALESCE(?, country),
 				    zip_code = COALESCE(?, zip_code),
 				    most_recent_employer = COALESCE(?, most_recent_employer),
+				    experience_years = COALESCE(?, experience_years),
+				    total_experience = COALESCE(?, total_experience),
+				    current_account_id = CASE WHEN ? IS NOT NULL THEN ? ELSE current_account_id END,
 				    updateddt = NOW()
 				WHERE employee_id = ?
 				""",
@@ -336,8 +407,31 @@ public class RisPortalEmployeeSyncService {
 				emp.status(), deptId, emp.jobTitle(), emp.jobTitle(), emp.highestQualification(),
 				emp.primarySkills(), emp.secondarySkills(), safePersonal,
 				emp.city(), emp.city(), emp.state(), emp.country(), emp.zipCode(), emp.previousEmployer(),
+				emp.experienceYears(), emp.experienceYears(),
+				clientAccountId, clientAccountId,
 				employeeId
 		);
+	}
+
+	private static String formatClientName(String raw) {
+		if (raw == null || raw.isBlank()) return null;
+		String trimmed = raw.trim();
+		if (trimmed.equalsIgnoreCase("CTS")) return "CTS";
+		if (trimmed.equalsIgnoreCase("CWS")) return "CWS";
+		if (trimmed.equalsIgnoreCase("GSK")) return "GSK";
+		if (trimmed.equalsIgnoreCase("TCS")) return "TCS";
+		String[] parts = trimmed.replace('_', ' ').split("\\s+");
+		StringBuilder sb = new StringBuilder();
+		for (String part : parts) {
+			if (!part.isEmpty()) {
+				if (!sb.isEmpty()) sb.append(" ");
+				sb.append(Character.toUpperCase(part.charAt(0)));
+				if (part.length() > 1) {
+					sb.append(part.substring(1).toLowerCase(Locale.ROOT));
+				}
+			}
+		}
+		return sb.toString();
 	}
 
 	private boolean isPersonalEmailAvailable(String personalEmail, Long selfEmployeeId) {
@@ -422,6 +516,8 @@ public class RisPortalEmployeeSyncService {
 			String zipCode,
 			String previousEmployer,
 			String departmentName,
-			String jobTitle
+			String jobTitle,
+			Integer experienceYears,
+			String clientName
 	) {}
 }

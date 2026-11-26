@@ -370,14 +370,28 @@ public class DemandServiceImpl implements DemandService {
 		Specification<Demand> dupSpec = (root, query, cb) -> {
 			List<Predicate> p = new ArrayList<>();
 			p.add(cb.equal(root.get("companyId"), dto.getCompanyId()));
-			p.add(cb.equal(root.get("demandtitle"), dto.getDemandTitle()));
 			p.add(cb.notEqual(root.get("overallStatus"), "Cancelled"));
+
+			if (dto.getDemandTitle() != null && !dto.getDemandTitle().trim().isEmpty()) {
+				p.add(cb.equal(cb.lower(cb.trim(root.get("demandtitle"))), dto.getDemandTitle().trim().toLowerCase()));
+			}
+
+			if (dto.getAccountId() != null) {
+				p.add(cb.equal(root.get("accountId"), dto.getAccountId()));
+			}
+
+			if (dto.getProjectName() != null && !dto.getProjectName().trim().isEmpty()) {
+				p.add(cb.equal(cb.lower(cb.trim(root.get("projectName"))), dto.getProjectName().trim().toLowerCase()));
+			} else {
+				p.add(cb.or(root.get("projectName").isNull(), cb.equal(cb.trim(root.get("projectName")), "")));
+			}
+
 			return cb.and(p.toArray(new Predicate[0]));
 		};
 
 		long count = demandRepo.count(dupSpec);
 		if (count > 0) {
-			throw new IllegalArgumentException("A Demand with this title already exists. Please check the list.");
+			throw new IllegalArgumentException("A Demand with this title already exists for this client and project. Please check the list.");
 		}
 
 		companyRepo.findById(dto.getCompanyId())
@@ -394,8 +408,8 @@ public class DemandServiceImpl implements DemandService {
 		demand.setRequesterUserId(dto.getRequesterUserId());
 		demand.setAccountId(dto.getAccountId());
 		demand.setDepartmentId(dto.getDepartmentId());
-		demand.setProjectName(dto.getProjectName());
-		demand.setDemandtitle(dto.getDemandTitle());
+		demand.setProjectName(dto.getProjectName() != null ? dto.getProjectName().trim() : null);
+		demand.setDemandtitle(dto.getDemandTitle() != null ? dto.getDemandTitle().trim() : null);
 		demand.setDescription(dto.getDescription());
 
 		if (dto.getDemandOpenDt() != null) {
@@ -445,11 +459,11 @@ public class DemandServiceImpl implements DemandService {
 		}
 
 		if (dto.getDemandTitle() != null)
-			demand.setDemandtitle(dto.getDemandTitle());
+			demand.setDemandtitle(dto.getDemandTitle().trim());
 		if (dto.getDescription() != null)
 			demand.setDescription(dto.getDescription());
 		if (dto.getProjectName() != null)
-			demand.setProjectName(dto.getProjectName());
+			demand.setProjectName(dto.getProjectName().trim());
 		if (dto.getYearsofexp() != null)
 			demand.setYearsofexp(dto.getYearsofexp());
 		if (dto.getSkillIds() != null)

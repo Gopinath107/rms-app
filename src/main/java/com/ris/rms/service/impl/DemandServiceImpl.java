@@ -1,5 +1,8 @@
 package com.ris.rms.service.impl;
 
+import java.math.BigDecimal;
+import org.springframework.beans.factory.annotation.Autowired;
+
 import java.io.ByteArrayOutputStream;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -90,6 +93,7 @@ import com.ris.rms.entity.Demand;
 import com.ris.rms.entity.Employee;
 import com.ris.rms.entity.EmployeeDocument;
 import com.ris.rms.entity.Interview;
+import com.ris.rms.entity.Project;
 import com.ris.rms.entity.ResourceRequest;
 import com.ris.rms.entity.Skill;
 import com.ris.rms.entity.UserAccount;
@@ -103,11 +107,13 @@ import com.ris.rms.repository.DepartmentRepository;
 import com.ris.rms.repository.EmployeeDocumentRepository;
 import com.ris.rms.repository.EmployeeRepository;
 import com.ris.rms.repository.InterviewRepository;
+import com.ris.rms.repository.ProjectRepository;
 import com.ris.rms.repository.ResourceRequestRepository;
 import com.ris.rms.repository.SkillRepository;
 import com.ris.rms.repository.UserAccountRepository;
 import com.ris.rms.service.DemandService;
 import com.ris.rms.service.EmailService;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.ris.rms.service.ResourceRequestService;
 
 import jakarta.persistence.criteria.Predicate;
@@ -135,6 +141,10 @@ public class DemandServiceImpl implements DemandService {
 	private final EmailService emailService;
 	private final CandidateRepository candidateRepo;
 	private final CandidateDocumentRepository candidateDocumentRepo;
+	@Autowired(required = false)
+	private ProjectRepository projectRepo;
+	@Autowired(required = false)
+	private JdbcTemplate jdbcTemplate;
 
 	private final ObjectMapper om = new ObjectMapper().registerModule(new JavaTimeModule())
 			.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -410,6 +420,7 @@ public class DemandServiceImpl implements DemandService {
 		demand.setOverallStatus("Open");
 
 		Demand savedDemand = demandRepo.save(demand);
+		ensureProjectExists(savedDemand);
 
 		// Resource Requests are NOT created at demand creation.
 		// resourceRequestsCount is only the required headcount target.
@@ -467,7 +478,44 @@ public class DemandServiceImpl implements DemandService {
 			demand.setDepartmentId(dto.getDepartmentId());
 
 		Demand saved = demandRepo.save(demand);
+		ensureProjectExists(saved);
 		return getDemandById(saved.getDemandid());
+	}
+
+	private void ensureProjectExists(Demand d) {
+		if (projectRepo == null || d == null || d.getProjectName() == null || d.getProjectName().isBlank() || d.getCompanyId() == null) {
+			return;
+		}
+		String name = d.getProjectName().trim();
+		try {
+			if (!projectRepo.existsByCompanyIdAndProjectNameIgnoreCase(d.getCompanyId(), name)) {
+				Project p = new Project();
+				p.setCompanyId(d.getCompanyId());
+				p.setAccountId(d.getAccountId());
+				p.setManagerUserId(d.getRequesterUserId());
+				p.setProjectName(name);
+				p.setDescription("Project created from demand: " + (d.getDemandtitle() != null ? d.getDemandtitle().trim() : name));
+				p.setStartDate(d.getDemandopendt() != null ? d.getDemandopendt() : LocalDate.now());
+				p.setEndDate(d.getFulfilmentdt());
+				p.setBudget(d.getBudget() != null ? BigDecimal.valueOf(d.getBudget()) : null);
+				p.setPriority(d.getPriority() != null ? d.getPriority() : "Medium");
+				p.setStatus("In Progress");
+				Project saved = projectRepo.save(p);
+
+				if (d.getSkillIds() != null && !d.getSkillIds().isEmpty()) {
+					for (Long sid : d.getSkillIds()) {
+						try {
+							jdbcTemplate.update("INSERT INTO rms.project_skill (project_id, skill_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+									saved.getProjectId(), sid);
+						} catch (Exception ignored) {
+						}
+					}
+				}
+				log.info("Auto-created project '{}' with id {} from demand id {}", name, saved.getProjectId(), d.getDemandid());
+			}
+		} catch (Exception e) {
+			log.warn("Failed to auto-create project '{}' from demand: {}", name, e.getMessage());
+		}
 	}
 
 	@Override

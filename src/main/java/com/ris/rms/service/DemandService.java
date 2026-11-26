@@ -10,6 +10,9 @@ import com.ris.rms.dto.DemandReportRequest;
 import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.DetailedResourceReportRequest;
 import com.ris.rms.dto.GroupFlowDto;
+import com.ris.rms.dto.ProfileHistoryEventDto;
+import com.ris.rms.dto.SharedProfileItemDto;
+import com.ris.rms.dto.SharedProfileSummaryDto;
 
 public interface DemandService {
 
@@ -32,4 +35,11 @@ public interface DemandService {
 	byte[] generateDetailedResourceReport(DetailedResourceReportRequest request) throws Exception;
 	
 	void updateDemandStatusOnResumeShare(Long demandId);
+
+	SharedProfileSummaryDto getSharedProfilesSummary();
+
+	Page<SharedProfileItemDto> getSharedProfilesList(String dateFilter, String fromDate, String toDate,
+			Long demandId, Long clientId, String status, String search, Pageable pageable);
+
+	List<ProfileHistoryEventDto> getProfileHistory(Long demandId, String resourceType, Long resourceId);
 }

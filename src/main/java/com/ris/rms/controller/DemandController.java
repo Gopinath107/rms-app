@@ -29,6 +29,9 @@ import com.ris.rms.dto.DemandResponseDto;
 import com.ris.rms.dto.DetailedResourceReportRequest;
 import com.ris.rms.dto.GroupFlowDto;
 import com.ris.rms.service.DemandMatchingService;
+import com.ris.rms.dto.ProfileHistoryEventDto;
+import com.ris.rms.dto.SharedProfileItemDto;
+import com.ris.rms.dto.SharedProfileSummaryDto;
 import com.ris.rms.service.DemandService;
 
 import jakarta.validation.Valid;
@@ -379,4 +382,144 @@ public class DemandController {
 		return v == null ? def : v;
 	}
 
+
+	@GetMapping("/shared-profiles/summary")
+
+	public ResponseEntity<Map<String, Object>> getSharedProfilesSummary() {
+
+		Map<String, Object> resp = new LinkedHashMap<>();
+
+		try {
+
+			SharedProfileSummaryDto summary = demandService.getSharedProfilesSummary();
+
+			resp.put("result", summary);
+
+			resp.put("success", true);
+
+			resp.put("errors", List.of());
+
+			resp.put("errorCount", 0);
+
+			return ResponseEntity.ok(resp);
+
+		} catch (Exception e) {
+
+			resp.put("result", null);
+
+			resp.put("success", false);
+
+			resp.put("errors", List.of(e.getMessage()));
+
+			resp.put("errorCount", 1);
+
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(resp);
+
+		}
+
+	}
+
+
+
+	@GetMapping("/shared-profiles")
+
+	public ResponseEntity<Map<String, Object>> getSharedProfilesList(
+
+			@RequestParam(required = false, defaultValue = "all") String dateFilter,
+
+			@RequestParam(required = false) String fromDate,
+
+			@RequestParam(required = false) String toDate,
+
+			@RequestParam(required = false) Long demandId,
+
+			@RequestParam(required = false) Long clientId,
+
+			@RequestParam(required = false) String status,
+
+			@RequestParam(required = false) String search,
+
+			@RequestParam(defaultValue = "0") int page,
+
+			@RequestParam(defaultValue = "20") int size) {
+
+		Map<String, Object> resp = new LinkedHashMap<>();
+
+		try {
+
+			Pageable pageable = PageRequest.of(page, size);
+
+			Page<SharedProfileItemDto> resultPage = demandService.getSharedProfilesList(
+
+					dateFilter, fromDate, toDate, demandId, clientId, status, search, pageable);
+
+			resp.put("result", resultPage);
+
+			resp.put("success", true);
+
+			resp.put("errors", List.of());
+
+			resp.put("errorCount", 0);
+
+			return ResponseEntity.ok(resp);
+
+		} catch (Exception e) {
+
+			resp.put("result", null);
+
+			resp.put("success", false);
+
+			resp.put("errors", List.of(e.getMessage()));
+
+			resp.put("errorCount", 1);
+
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(resp);
+
+		}
+
+	}
+
+
+
+	@GetMapping("/{demandId}/profiles/{resourceType}/{resourceId}/history")
+
+	public ResponseEntity<Map<String, Object>> getProfileHistory(
+
+			@PathVariable Long demandId,
+
+			@PathVariable String resourceType,
+
+			@PathVariable Long resourceId) {
+
+		Map<String, Object> resp = new LinkedHashMap<>();
+
+		try {
+
+			List<ProfileHistoryEventDto> history = demandService.getProfileHistory(demandId, resourceType, resourceId);
+
+			resp.put("result", history);
+
+			resp.put("success", true);
+
+			resp.put("errors", List.of());
+
+			resp.put("errorCount", 0);
+
+			return ResponseEntity.ok(resp);
+
+		} catch (Exception e) {
+
+			resp.put("result", null);
+
+			resp.put("success", false);
+
+			resp.put("errors", List.of(e.getMessage()));
+
+			resp.put("errorCount", 1);
+
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(resp);
+
+		}
+
+	}
 }

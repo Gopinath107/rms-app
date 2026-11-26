@@ -188,7 +188,7 @@ public class Candidate {
     @Column(name = "suggested_keywords", columnDefinition = "TEXT")
     private String suggestedKeywords;
 
-    @Column(name = "social_links_json", columnDefinition = "JSON")
+    @Column(name = "social_links_json", columnDefinition = "TEXT")
     private String socialLinksJson;
 
     @Column(name = "current_account_id")

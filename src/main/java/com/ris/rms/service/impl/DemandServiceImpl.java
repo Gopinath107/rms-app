@@ -380,18 +380,13 @@ public class DemandServiceImpl implements DemandService {
 				p.add(cb.equal(root.get("accountId"), dto.getAccountId()));
 			}
 
-			if (dto.getProjectName() != null && !dto.getProjectName().trim().isEmpty()) {
-				p.add(cb.equal(cb.lower(cb.trim(root.get("projectName"))), dto.getProjectName().trim().toLowerCase()));
-			} else {
-				p.add(cb.or(root.get("projectName").isNull(), cb.equal(cb.trim(root.get("projectName")), "")));
-			}
-
 			return cb.and(p.toArray(new Predicate[0]));
 		};
 
 		long count = demandRepo.count(dupSpec);
 		if (count > 0) {
-			throw new IllegalArgumentException("A Demand with this title already exists for this client and project. Please check the list.");
+			throw new IllegalArgumentException(
+					"A Demand with this title already exists for this client. Please check the list.");
 		}
 
 		companyRepo.findById(dto.getCompanyId())
@@ -438,7 +433,8 @@ public class DemandServiceImpl implements DemandService {
 
 		// Resource Requests are NOT created at demand creation.
 		// resourceRequestsCount is only the required headcount target.
-		// Actual ResourceRequest records are created when HR shares a resume to this demand.
+		// Actual ResourceRequest records are created when HR shares a resume to this
+		// demand.
 
 		return getDemandById(savedDemand.getDemandid());
 	}
@@ -452,9 +448,32 @@ public class DemandServiceImpl implements DemandService {
 			throw new IllegalArgumentException("This Demand is Cancelled and cannot be edited.");
 		}
 
+		String newTitle = dto.getDemandTitle() != null ? dto.getDemandTitle().trim() : demand.getDemandtitle();
+		Long newAccountId = dto.getAccountId() != null ? dto.getAccountId() : demand.getAccountId();
+		Long compId = dto.getCompanyId() != null ? dto.getCompanyId() : demand.getCompanyId();
+
+		if (newTitle != null && !newTitle.isBlank() && newAccountId != null) {
+			final String checkTitle = newTitle.trim().toLowerCase();
+			Specification<Demand> dupUpdateSpec = (root, query, cb) -> {
+				List<Predicate> p = new ArrayList<>();
+				p.add(cb.equal(root.get("companyId"), compId));
+				p.add(cb.notEqual(root.get("demandid"), demandId));
+				p.add(cb.notEqual(root.get("overallStatus"), "Cancelled"));
+				p.add(cb.equal(cb.lower(cb.trim(root.get("demandtitle"))), checkTitle));
+				p.add(cb.equal(root.get("accountId"), newAccountId));
+				return cb.and(p.toArray(new Predicate[0]));
+			};
+			if (demandRepo.count(dupUpdateSpec) > 0) {
+				throw new IllegalArgumentException(
+						"A Demand with this title already exists for this client. Please check the list.");
+			}
+		}
+
 		if (dto.getResourceRequests() != null) {
-			// Only update the required headcount target — do NOT create/delete ResourceRequest records.
-			// Actual ResourceRequest records are created only when HR shares a resume to this demand.
+			// Only update the required headcount target — do NOT create/delete
+			// ResourceRequest records.
+			// Actual ResourceRequest records are created only when HR shares a resume to
+			// this demand.
 			demand.setResourceRequestsCount(dto.getResourceRequests());
 		}
 
@@ -497,7 +516,8 @@ public class DemandServiceImpl implements DemandService {
 	}
 
 	private void ensureProjectExists(Demand d) {
-		if (projectRepo == null || d == null || d.getProjectName() == null || d.getProjectName().isBlank() || d.getCompanyId() == null) {
+		if (projectRepo == null || d == null || d.getProjectName() == null || d.getProjectName().isBlank()
+				|| d.getCompanyId() == null) {
 			return;
 		}
 		String name = d.getProjectName().trim();
@@ -508,7 +528,8 @@ public class DemandServiceImpl implements DemandService {
 				p.setAccountId(d.getAccountId());
 				p.setManagerUserId(d.getRequesterUserId());
 				p.setProjectName(name);
-				p.setDescription("Project created from demand: " + (d.getDemandtitle() != null ? d.getDemandtitle().trim() : name));
+				p.setDescription("Project created from demand: "
+						+ (d.getDemandtitle() != null ? d.getDemandtitle().trim() : name));
 				p.setStartDate(d.getDemandopendt() != null ? d.getDemandopendt() : LocalDate.now());
 				p.setEndDate(d.getFulfilmentdt());
 				p.setBudget(d.getBudget() != null ? BigDecimal.valueOf(d.getBudget()) : null);
@@ -519,13 +540,15 @@ public class DemandServiceImpl implements DemandService {
 				if (d.getSkillIds() != null && !d.getSkillIds().isEmpty()) {
 					for (Long sid : d.getSkillIds()) {
 						try {
-							jdbcTemplate.update("INSERT INTO rms.project_skill (project_id, skill_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+							jdbcTemplate.update(
+									"INSERT INTO rms.project_skill (project_id, skill_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
 									saved.getProjectId(), sid);
 						} catch (Exception ignored) {
 						}
 					}
 				}
-				log.info("Auto-created project '{}' with id {} from demand id {}", name, saved.getProjectId(), d.getDemandid());
+				log.info("Auto-created project '{}' with id {} from demand id {}", name, saved.getProjectId(),
+						d.getDemandid());
 			}
 		} catch (Exception e) {
 			log.warn("Failed to auto-create project '{}' from demand: {}", name, e.getMessage());
@@ -828,43 +851,43 @@ public class DemandServiceImpl implements DemandService {
 		if (demand.getSkillIds() != null && !demand.getSkillIds().isEmpty()) {
 			dto.setSkillName(skillRepo.findAllById(demand.getSkillIds()).stream().map(Skill::getSkillName).toList());
 		}
-		
+
 		if (demand.getRequesterUserId() != null) {
-		    userAccountRepo.findById(demand.getRequesterUserId()).ifPresent(ua -> {
-		        dto.setRequesterEmail(ua.getEmail());
-		        if (ua.getEmployeeId() != null) {
-		            employeeRepo.findById(ua.getEmployeeId())
-		                    .ifPresent(e -> dto.setRequesterName(e.getFirstName() + " " + e.getLastName()));
-		        }
-		    });
+			userAccountRepo.findById(demand.getRequesterUserId()).ifPresent(ua -> {
+				dto.setRequesterEmail(ua.getEmail());
+				if (ua.getEmployeeId() != null) {
+					employeeRepo.findById(ua.getEmployeeId())
+							.ifPresent(e -> dto.setRequesterName(e.getFirstName() + " " + e.getLastName()));
+				}
+			});
 		}
-		
+
 		if (demand.getUpdatedby() != null) {
-		    dto.setUpdatedById(demand.getUpdatedby());
-		    userAccountRepo.findById(demand.getUpdatedby()).ifPresent(ua -> {
-		        dto.setUpdatedByEmail(ua.getEmail());
-		        if (ua.getEmployeeId() != null) {
-		            employeeRepo.findById(ua.getEmployeeId())
-		                    .ifPresent(e -> dto.setUpdatedByName(e.getFirstName() + " " + e.getLastName()));
-		        }
-		        if (dto.getUpdatedByName() == null) {
-		            dto.setUpdatedByName(ua.getEmail());
-		        }
-		    });
+			dto.setUpdatedById(demand.getUpdatedby());
+			userAccountRepo.findById(demand.getUpdatedby()).ifPresent(ua -> {
+				dto.setUpdatedByEmail(ua.getEmail());
+				if (ua.getEmployeeId() != null) {
+					employeeRepo.findById(ua.getEmployeeId())
+							.ifPresent(e -> dto.setUpdatedByName(e.getFirstName() + " " + e.getLastName()));
+				}
+				if (dto.getUpdatedByName() == null) {
+					dto.setUpdatedByName(ua.getEmail());
+				}
+			});
 		}
 		List<ResourceRequest> childRequests = rrRepo.findActualByDemandId(demand.getDemandid());
 		List<DemandResponseDto.ResumeShareInfo> sharedResumes = getResumeShareInfos(demand.getDemandid());
 		if (sharedResumes != null) {
 			for (DemandResponseDto.ResumeShareInfo info : sharedResumes) {
 				Optional<ResourceRequest> matchingReq = childRequests.stream()
-					.filter(r -> {
-						if ("EMPLOYEE".equals(info.getResourceType())) {
-							return Objects.equals(r.getEmployeeId(), info.getResourceId());
-						} else {
-							return Objects.equals(r.getCandidateId(), info.getResourceId());
-						}
-					})
-					.findFirst();
+						.filter(r -> {
+							if ("EMPLOYEE".equals(info.getResourceType())) {
+								return Objects.equals(r.getEmployeeId(), info.getResourceId());
+							} else {
+								return Objects.equals(r.getCandidateId(), info.getResourceId());
+							}
+						})
+						.findFirst();
 				if (matchingReq.isPresent()) {
 					info.setStatus(resolveResourceStatus(matchingReq.get()));
 				} else {
@@ -1525,40 +1548,44 @@ public class DemandServiceImpl implements DemandService {
 		return null;
 	}
 
-	// Helper 1: Scans Employee and Candidate documents for share history linked to this demand
+	// Helper 1: Scans Employee and Candidate documents for share history linked to
+	// this demand
 	private List<DemandResponseDto.ResumeShareInfo> getResumeShareInfos(Long demandId) {
-	    List<DemandResponseDto.ResumeShareInfo> results = new ArrayList<>();
+		List<DemandResponseDto.ResumeShareInfo> results = new ArrayList<>();
 
-	    // 1. Process Employee Documents
-	    List<EmployeeDocument> empDocs = employeeDocumentRepo.findAll(); 
-	    for (EmployeeDocument doc : empDocs) {
-	        if (StringUtils.hasText(doc.getResumeShareMeta())) {
-	            parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getEmployeeId(), "EMPLOYEE");
-	        }
-	    }
+		// 1. Process Employee Documents
+		List<EmployeeDocument> empDocs = employeeDocumentRepo.findAll();
+		for (EmployeeDocument doc : empDocs) {
+			if (StringUtils.hasText(doc.getResumeShareMeta())) {
+				parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getEmployeeId(), "EMPLOYEE");
+			}
+		}
 
-	    // 2. Process Candidate Documents
-	    List<CandidateDocument> candDocs = candidateDocumentRepo.findAll();
-	    for (CandidateDocument doc : candDocs) {
-	        if (StringUtils.hasText(doc.getResumeShareMeta())) {
-	            parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getCandidateId(), "CANDIDATE");
-	        }
-	    }
-	    
-	    return results;
+		// 2. Process Candidate Documents
+		List<CandidateDocument> candDocs = candidateDocumentRepo.findAll();
+		for (CandidateDocument doc : candDocs) {
+			if (StringUtils.hasText(doc.getResumeShareMeta())) {
+				parseAndAddShareInfo(results, doc.getResumeShareMeta(), demandId, doc.getCandidateId(), "CANDIDATE");
+			}
+		}
+
+		return results;
 	}
 
 	// Helper 2: Parses the JSON history and extracts details if the demand matches
-	private void parseAndAddShareInfo(List<DemandResponseDto.ResumeShareInfo> results, String jsonMeta, Long targetDemandId, Long resourceId, String type) {
+	private void parseAndAddShareInfo(List<DemandResponseDto.ResumeShareInfo> results, String jsonMeta,
+			Long targetDemandId, Long resourceId, String type) {
 		try {
-			if (!StringUtils.hasText(jsonMeta)) return;
+			if (!StringUtils.hasText(jsonMeta))
+				return;
 
 			List<ResumeShareDto> history = new ArrayList<>();
 			String trimmed = jsonMeta.trim();
 
 			// FIX: Handle both Single Object and List formats
 			if (trimmed.startsWith("[")) {
-				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
+				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {
+				});
 			} else if (trimmed.startsWith("{")) {
 				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
 				history.add(single);
@@ -1566,7 +1593,8 @@ public class DemandServiceImpl implements DemandService {
 				return;
 			}
 
-			if (history == null || history.isEmpty()) return;
+			if (history == null || history.isEmpty())
+				return;
 
 			for (ResumeShareDto share : history) {
 				boolean isMatch = false;
@@ -1598,8 +1626,9 @@ public class DemandServiceImpl implements DemandService {
 					DemandResponseDto.ResumeShareInfo info = new DemandResponseDto.ResumeShareInfo();
 					info.setResourceId(resourceId);
 					info.setResourceType(type);
-					
-					// Use the 'sharedAt' from the inner detail if available, otherwise the main action time
+
+					// Use the 'sharedAt' from the inner detail if available, otherwise the main
+					// action time
 					info.setSharedAt(share.getActionAt());
 					if (share.getSharedWith() != null) {
 						for (Map<String, Object> detail : share.getSharedWith()) {
@@ -1608,7 +1637,8 @@ public class DemandServiceImpl implements DemandService {
 								if (specificDate != null) {
 									try {
 										info.setSharedAt(OffsetDateTime.parse(specificDate));
-									} catch(Exception e) {}
+									} catch (Exception e) {
+									}
 								}
 								break;
 							}
@@ -1620,11 +1650,11 @@ public class DemandServiceImpl implements DemandService {
 						userAccountRepo.findById(share.getActionByUserId()).ifPresent(u -> {
 							info.setSharedByEmail(u.getEmail());
 							if (u.getEmployeeId() != null) {
-								employeeRepo.findById(u.getEmployeeId()).ifPresent(e -> 
-									info.setSharedBy(e.getFirstName() + " " + e.getLastName())
-								);
+								employeeRepo.findById(u.getEmployeeId())
+										.ifPresent(e -> info.setSharedBy(e.getFirstName() + " " + e.getLastName()));
 							}
-							if (info.getSharedBy() == null) info.setSharedBy(u.getEmail());
+							if (info.getSharedBy() == null)
+								info.setSharedBy(u.getEmail());
 						});
 					} else if (share.getActionByUserName() != null) {
 						info.setSharedBy(share.getActionByUserName());
@@ -1642,7 +1672,7 @@ public class DemandServiceImpl implements DemandService {
 							info.setResourceEmail(c.getEmail());
 						});
 					}
-					
+
 					results.add(info);
 				}
 			}
@@ -1651,10 +1681,12 @@ public class DemandServiceImpl implements DemandService {
 		}
 	}
 
-    // Small helper to safely cast object to Long
+	// Small helper to safely cast object to Long
 	private Long asLong(Object o) {
-		if (o == null) return null;
-		if (o instanceof Number) return ((Number) o).longValue();
+		if (o == null)
+			return null;
+		if (o instanceof Number)
+			return ((Number) o).longValue();
 		try {
 			return Long.valueOf(o.toString());
 		} catch (Exception e) {
@@ -1665,10 +1697,10 @@ public class DemandServiceImpl implements DemandService {
 	// ═══════════════════════════════════════════════════════
 	// DETAILED RESOURCE REPORT
 	// Sheet layout:
-	//   [0] Demand Summary  — one row per demand with level counts
-	//   [1] Pivot Summary   — grouped demand×stage breakdown with outline grouping
-	//   [2] Charts          — clustered bar + pie chart (visible data)
-	//   [3] MasterData      — raw candidate rows
+	// [0] Demand Summary — one row per demand with level counts
+	// [1] Pivot Summary — grouped demand×stage breakdown with outline grouping
+	// [2] Charts — clustered bar + pie chart (visible data)
+	// [3] MasterData — raw candidate rows
 	// ═══════════════════════════════════════════════════════
 
 	@Override
@@ -1707,13 +1739,15 @@ public class DemandServiceImpl implements DemandService {
 		for (Map.Entry<Long, List<GroupFlowDto>> ge : byGroup.entrySet()) {
 			Long demandId = ge.getKey();
 			List<GroupFlowDto> groupRows = ge.getValue();
-			if (groupRows.isEmpty()) continue;
+			if (groupRows.isEmpty())
+				continue;
 
 			List<Long> skillIds = demandSkillIds.getOrDefault(demandId, List.of());
 			String skillsStr = skillIds.stream()
 					.map(id -> skillNameMap.getOrDefault(id, "Skill#" + id))
 					.collect(Collectors.joining(", "));
-			if (skillsStr.isBlank()) skillsStr = "-";
+			if (skillsStr.isBlank())
+				skillsStr = "-";
 
 			Map<Long, List<GroupFlowDto>> byInterview = groupRows.stream()
 					.filter(r -> r.getInterviewId() != null)
@@ -1736,7 +1770,7 @@ public class DemandServiceImpl implements DemandService {
 		}
 
 		try (XSSFWorkbook workbook = new XSSFWorkbook();
-			 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+				ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
 			Font boldFont = workbook.createFont();
 			boldFont.setBold(true);
@@ -1752,8 +1786,10 @@ public class DemandServiceImpl implements DemandService {
 			navyHdrStyle.setFont(whiteBoldFont);
 			navyHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 73, 125), null));
 			navyHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			navyHdrStyle.setBorderBottom(BorderStyle.THIN); navyHdrStyle.setBorderTop(BorderStyle.THIN);
-			navyHdrStyle.setBorderLeft(BorderStyle.THIN);  navyHdrStyle.setBorderRight(BorderStyle.THIN);
+			navyHdrStyle.setBorderBottom(BorderStyle.THIN);
+			navyHdrStyle.setBorderTop(BorderStyle.THIN);
+			navyHdrStyle.setBorderLeft(BorderStyle.THIN);
+			navyHdrStyle.setBorderRight(BorderStyle.THIN);
 			navyHdrStyle.setAlignment(HorizontalAlignment.LEFT);
 			navyHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
@@ -1761,15 +1797,19 @@ public class DemandServiceImpl implements DemandService {
 			pivotHdrStyle.setFont(whiteBoldFont);
 			pivotHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(68, 84, 106), null));
 			pivotHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			pivotHdrStyle.setBorderBottom(BorderStyle.THIN); pivotHdrStyle.setBorderTop(BorderStyle.THIN);
-			pivotHdrStyle.setBorderLeft(BorderStyle.THIN);  pivotHdrStyle.setBorderRight(BorderStyle.THIN);
+			pivotHdrStyle.setBorderBottom(BorderStyle.THIN);
+			pivotHdrStyle.setBorderTop(BorderStyle.THIN);
+			pivotHdrStyle.setBorderLeft(BorderStyle.THIN);
+			pivotHdrStyle.setBorderRight(BorderStyle.THIN);
 			pivotHdrStyle.setAlignment(HorizontalAlignment.LEFT);
 			pivotHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle cellStyle = workbook.createCellStyle();
 			cellStyle.setFont(plainFont);
-			cellStyle.setBorderBottom(BorderStyle.THIN); cellStyle.setBorderTop(BorderStyle.THIN);
-			cellStyle.setBorderLeft(BorderStyle.THIN);  cellStyle.setBorderRight(BorderStyle.THIN);
+			cellStyle.setBorderBottom(BorderStyle.THIN);
+			cellStyle.setBorderTop(BorderStyle.THIN);
+			cellStyle.setBorderLeft(BorderStyle.THIN);
+			cellStyle.setBorderRight(BorderStyle.THIN);
 			cellStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle centerStyle = workbook.createCellStyle();
@@ -1811,22 +1851,23 @@ public class DemandServiceImpl implements DemandService {
 			// ── SHEET 0: Demand Summary ─────────────────────────────────────────
 			// One row per demand.
 			// Columns: Demand ID | Client | Skill(s) |
-			//   L1 | L2 | L3 | HR Round | Final Round   (total at each level)
-			//   | Allocated | Not Started | Total Candidates
+			// L1 | L2 | L3 | HR Round | Final Round (total at each level)
+			// | Allocated | Not Started | Total Candidates
 			// ────────────────────────────────────────────────────────────────────
-			final String[] LEVEL_COLS = {"L1", "L2", "L3", "HR Round", "Final Round"};
+			final String[] LEVEL_COLS = { "L1", "L2", "L3", "HR Round", "Final Round" };
 			// 3 fixed + levels + Allocated + Not Started + Total = 3 + 5 + 3 = 11
 			final int totalCols = 3 + LEVEL_COLS.length + 3;
-			final int COL_ALLOC    = 3 + LEVEL_COLS.length;
+			final int COL_ALLOC = 3 + LEVEL_COLS.length;
 			final int COL_NOTSTART = 3 + LEVEL_COLS.length + 1;
-			final int COL_TOTAL    = 3 + LEVEL_COLS.length + 2;
+			final int COL_TOTAL = 3 + LEVEL_COLS.length + 2;
 
 			XSSFSheet pivotSheet = workbook.createSheet("Demand Summary");
 			pivotSheet.setDisplayGridlines(true);
 			pivotSheet.setColumnWidth(0, 4000);
 			pivotSheet.setColumnWidth(1, 5000);
 			pivotSheet.setColumnWidth(2, 8000);
-			for (int i = 3; i < totalCols; i++) pivotSheet.setColumnWidth(i, 3800);
+			for (int i = 3; i < totalCols; i++)
+				pivotSheet.setColumnWidth(i, 3800);
 
 			// Title
 			Row rTitle = pivotSheet.createRow(0);
@@ -1847,7 +1888,8 @@ public class DemandServiceImpl implements DemandService {
 			Row rSub = pivotSheet.createRow(1);
 			rSub.setHeightInPoints(16);
 			Cell cSub = rSub.createCell(0);
-			cSub.setCellValue("Each level column = total candidates at that stage (Scheduled + Selected + Rejected)  |  See Charts sheet for graphs");
+			cSub.setCellValue(
+					"Each level column = total candidates at that stage (Scheduled + Selected + Rejected)  |  See Charts sheet for graphs");
 			XSSFCellStyle subStyle2 = workbook.createCellStyle();
 			XSSFFont subFont2 = workbook.createFont();
 			subFont2.setItalic(true);
@@ -1863,15 +1905,15 @@ public class DemandServiceImpl implements DemandService {
 			// Column headers
 			Row rHead = pivotSheet.createRow(3);
 			rHead.setHeightInPoints(28);
-			setCellHelper(rHead, 0, "Demand ID",    pivotHdrStyle);
-			setCellHelper(rHead, 1, "Client",       pivotHdrStyle);
-			setCellHelper(rHead, 2, "Skill(s)",     pivotHdrStyle);
+			setCellHelper(rHead, 0, "Demand ID", pivotHdrStyle);
+			setCellHelper(rHead, 1, "Client", pivotHdrStyle);
+			setCellHelper(rHead, 2, "Skill(s)", pivotHdrStyle);
 			for (int i = 0; i < LEVEL_COLS.length; i++) {
 				setCellHelper(rHead, 3 + i, LEVEL_COLS[i], pivotHdrStyle);
 			}
-			setCellHelper(rHead, COL_ALLOC,    "Allocated",   pivotHdrStyle);
+			setCellHelper(rHead, COL_ALLOC, "Allocated", pivotHdrStyle);
 			setCellHelper(rHead, COL_NOTSTART, "Not Started", pivotHdrStyle);
-			setCellHelper(rHead, COL_TOTAL,    "Total",       pivotHdrStyle);
+			setCellHelper(rHead, COL_TOTAL, "Total", pivotHdrStyle);
 
 			// Group masterRows by Demand ID
 			Map<String, List<MasterDataRow>> rowsByDemand = new LinkedHashMap<>();
@@ -1883,28 +1925,30 @@ public class DemandServiceImpl implements DemandService {
 			int grandTotal = 0;
 			int grandAlloc = 0;
 			Map<String, Integer> grandByLevel = new LinkedHashMap<>();
-			for (String lv : LEVEL_COLS) grandByLevel.put(lv, 0);
+			for (String lv : LEVEL_COLS)
+				grandByLevel.put(lv, 0);
 
 			// Demand-level chart data: demandId → level counts
-			List<String>              chartDemands    = new ArrayList<>();
+			List<String> chartDemands = new ArrayList<>();
 			List<Map<String, Integer>> chartLevelData = new ArrayList<>();
-			List<Integer>             chartAllocData  = new ArrayList<>();
+			List<Integer> chartAllocData = new ArrayList<>();
 
 			int pivRowIdx = 4;
 			for (Map.Entry<String, List<MasterDataRow>> demEntry : rowsByDemand.entrySet()) {
-				String demandId         = demEntry.getKey();
+				String demandId = demEntry.getKey();
 				List<MasterDataRow> demRows = demEntry.getValue();
-				MasterDataRow first     = demRows.get(0);
+				MasterDataRow first = demRows.get(0);
 
-				int total      = demRows.size();
-				int allocated  = 0;
+				int total = demRows.size();
+				int allocated = 0;
 				int notStarted = 0;
 				Map<String, Integer> byLevel = new LinkedHashMap<>();
-				for (String lv : LEVEL_COLS) byLevel.put(lv, 0);
+				for (String lv : LEVEL_COLS)
+					byLevel.put(lv, 0);
 
 				for (MasterDataRow m : demRows) {
 					String status = m.getStatus();
-					String lvl    = extractLevelFromStatus(status);
+					String lvl = extractLevelFromStatus(status);
 					if (lvl != null) {
 						byLevel.merge(lvl, 1, Integer::sum);
 					} else {
@@ -1912,7 +1956,8 @@ public class DemandServiceImpl implements DemandService {
 						notStarted++;
 					}
 					// Allocated = candidated with "Selected" / "Allocated" (final outcome)
-					if (isAllocatedStatus(status)) allocated++;
+					if (isAllocatedStatus(status))
+						allocated++;
 				}
 
 				// Accumulate grand totals
@@ -1928,14 +1973,14 @@ public class DemandServiceImpl implements DemandService {
 				chartAllocData.add(allocated);
 
 				// Alternating row shading
-				XSSFCellStyle rcs = (pivRowIdx % 2 == 0) ? cellStyle    : altRowStyle;
-				XSSFCellStyle rcc = (pivRowIdx % 2 == 0) ? centerStyle  : altCenterStyle;
+				XSSFCellStyle rcs = (pivRowIdx % 2 == 0) ? cellStyle : altRowStyle;
+				XSSFCellStyle rcc = (pivRowIdx % 2 == 0) ? centerStyle : altCenterStyle;
 
 				Row row = pivotSheet.createRow(pivRowIdx++);
 				row.setHeightInPoints(20);
-				setCellHelper(row, 0, demandId,          rcs);
+				setCellHelper(row, 0, demandId, rcs);
 				setCellHelper(row, 1, first.getClient(), rcs);
-				setCellHelper(row, 2, first.getSkill(),  rcs);
+				setCellHelper(row, 2, first.getSkill(), rcs);
 				for (int i = 0; i < LEVEL_COLS.length; i++) {
 					Cell c = row.createCell(3 + i);
 					c.setCellValue(byLevel.getOrDefault(LEVEL_COLS[i], 0));
@@ -1956,8 +2001,8 @@ public class DemandServiceImpl implements DemandService {
 			Row rGT = pivotSheet.createRow(pivRowIdx);
 			rGT.setHeightInPoints(22);
 			setCellHelper(rGT, 0, "Grand Total", grandTotalStyle);
-			setCellHelper(rGT, 1, "",            grandTotalStyle);
-			setCellHelper(rGT, 2, "",            grandTotalStyle);
+			setCellHelper(rGT, 1, "", grandTotalStyle);
+			setCellHelper(rGT, 2, "", grandTotalStyle);
 			for (int i = 0; i < LEVEL_COLS.length; i++) {
 				Cell c = rGT.createCell(3 + i);
 				c.setCellValue(grandByLevel.getOrDefault(LEVEL_COLS[i], 0));
@@ -1986,15 +2031,19 @@ public class DemandServiceImpl implements DemandService {
 			pvGroupHdrStyle.setFont(whiteBoldFont);
 			pvGroupHdrStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(31, 56, 100), null)); // #1F3864
 			pvGroupHdrStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			pvGroupHdrStyle.setBorderBottom(BorderStyle.THIN); pvGroupHdrStyle.setBorderTop(BorderStyle.THIN);
-			pvGroupHdrStyle.setBorderLeft(BorderStyle.THIN);  pvGroupHdrStyle.setBorderRight(BorderStyle.THIN);
+			pvGroupHdrStyle.setBorderBottom(BorderStyle.THIN);
+			pvGroupHdrStyle.setBorderTop(BorderStyle.THIN);
+			pvGroupHdrStyle.setBorderLeft(BorderStyle.THIN);
+			pvGroupHdrStyle.setBorderRight(BorderStyle.THIN);
 			pvGroupHdrStyle.setAlignment(HorizontalAlignment.LEFT);
 			pvGroupHdrStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle pvSubRowStyle = workbook.createCellStyle();
 			pvSubRowStyle.setFont(plainFont);
-			pvSubRowStyle.setBorderBottom(BorderStyle.THIN); pvSubRowStyle.setBorderTop(BorderStyle.THIN);
-			pvSubRowStyle.setBorderLeft(BorderStyle.THIN);  pvSubRowStyle.setBorderRight(BorderStyle.THIN);
+			pvSubRowStyle.setBorderBottom(BorderStyle.THIN);
+			pvSubRowStyle.setBorderTop(BorderStyle.THIN);
+			pvSubRowStyle.setBorderLeft(BorderStyle.THIN);
+			pvSubRowStyle.setBorderRight(BorderStyle.THIN);
 			pvSubRowStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 			pvSubRowStyle.setIndention((short) 2);
 
@@ -2005,8 +2054,10 @@ public class DemandServiceImpl implements DemandService {
 
 			XSSFCellStyle pvCountStyle = workbook.createCellStyle();
 			pvCountStyle.setFont(plainFont);
-			pvCountStyle.setBorderBottom(BorderStyle.THIN); pvCountStyle.setBorderTop(BorderStyle.THIN);
-			pvCountStyle.setBorderLeft(BorderStyle.THIN);  pvCountStyle.setBorderRight(BorderStyle.THIN);
+			pvCountStyle.setBorderBottom(BorderStyle.THIN);
+			pvCountStyle.setBorderTop(BorderStyle.THIN);
+			pvCountStyle.setBorderLeft(BorderStyle.THIN);
+			pvCountStyle.setBorderRight(BorderStyle.THIN);
 			pvCountStyle.setAlignment(HorizontalAlignment.CENTER);
 			pvCountStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
@@ -2019,8 +2070,10 @@ public class DemandServiceImpl implements DemandService {
 			pvSubtotalStyle.setFont(boldFont);
 			pvSubtotalStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(189, 215, 238), null)); // #BDD7EE
 			pvSubtotalStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			pvSubtotalStyle.setBorderBottom(BorderStyle.MEDIUM); pvSubtotalStyle.setBorderTop(BorderStyle.THIN);
-			pvSubtotalStyle.setBorderLeft(BorderStyle.THIN);   pvSubtotalStyle.setBorderRight(BorderStyle.THIN);
+			pvSubtotalStyle.setBorderBottom(BorderStyle.MEDIUM);
+			pvSubtotalStyle.setBorderTop(BorderStyle.THIN);
+			pvSubtotalStyle.setBorderLeft(BorderStyle.THIN);
+			pvSubtotalStyle.setBorderRight(BorderStyle.THIN);
 			pvSubtotalStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle pvSubtotalCountStyle = workbook.createCellStyle();
@@ -2031,8 +2084,10 @@ public class DemandServiceImpl implements DemandService {
 			pvGrandStyle.setFont(whiteBoldFont);
 			pvGrandStyle.setFillForegroundColor(new XSSFColor(new java.awt.Color(46, 64, 87), null)); // #2E4057
 			pvGrandStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-			pvGrandStyle.setBorderBottom(BorderStyle.DOUBLE); pvGrandStyle.setBorderTop(BorderStyle.MEDIUM);
-			pvGrandStyle.setBorderLeft(BorderStyle.THIN);    pvGrandStyle.setBorderRight(BorderStyle.THIN);
+			pvGrandStyle.setBorderBottom(BorderStyle.DOUBLE);
+			pvGrandStyle.setBorderTop(BorderStyle.MEDIUM);
+			pvGrandStyle.setBorderLeft(BorderStyle.THIN);
+			pvGrandStyle.setBorderRight(BorderStyle.THIN);
 			pvGrandStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
 			XSSFCellStyle pvGrandCountStyle = workbook.createCellStyle();
@@ -2040,9 +2095,9 @@ public class DemandServiceImpl implements DemandService {
 			pvGrandCountStyle.setAlignment(HorizontalAlignment.CENTER);
 
 			// Column widths: A = ~280px, B = ~200px, C = ~100px
-			pivSumSheet.setColumnWidth(0, 11000);  // ~280px
-			pivSumSheet.setColumnWidth(1, 7800);   // ~200px
-			pivSumSheet.setColumnWidth(2, 3900);   // ~100px
+			pivSumSheet.setColumnWidth(0, 11000); // ~280px
+			pivSumSheet.setColumnWidth(1, 7800); // ~200px
+			pivSumSheet.setColumnWidth(2, 3900); // ~100px
 
 			// Title row
 			int pvRow = 0;
@@ -2089,7 +2144,8 @@ public class DemandServiceImpl implements DemandService {
 			for (Map.Entry<String, List<MasterDataRow>> demEntry : rowsByDemand.entrySet()) {
 				String demandId = demEntry.getKey();
 				List<MasterDataRow> demRows = demEntry.getValue();
-				if (demRows.isEmpty()) continue;
+				if (demRows.isEmpty())
+					continue;
 
 				MasterDataRow first = demRows.get(0);
 				String groupLabel = "\u229E " + demandId.replace("DEM-", "Demand -")
@@ -2129,7 +2185,6 @@ public class DemandServiceImpl implements DemandService {
 					cntCell.setCellValue(se.getValue());
 					cntCell.setCellStyle(cntSt);
 
-
 					demSubTotal += se.getValue();
 					pvRow++;
 					subIdx++;
@@ -2149,7 +2204,7 @@ public class DemandServiceImpl implements DemandService {
 				pvGrandTotal += demSubTotal;
 
 				if (subRowStart < pvRow - 1) {
-					outlineRanges.add(new int[]{subRowStart, pvRow - 2});
+					outlineRanges.add(new int[] { subRowStart, pvRow - 2 });
 				}
 			}
 
@@ -2207,7 +2262,8 @@ public class DemandServiceImpl implements DemandService {
 			// Auto-size data columns
 			for (int i = 0; i < chartCols; i++) {
 				chartSheet.autoSizeColumn(i);
-				if (chartSheet.getColumnWidth(i) < 3000) chartSheet.setColumnWidth(i, 3000);
+				if (chartSheet.getColumnWidth(i) < 3000)
+					chartSheet.setColumnWidth(i, 3000);
 			}
 
 			// ── Chart 1: Clustered column chart — pipeline per demand ──
@@ -2215,7 +2271,8 @@ public class DemandServiceImpl implements DemandService {
 				XSSFDrawing drawing1 = chartSheet.createDrawingPatriarch();
 				// Place chart to the right of data — starts at column chartCols+1
 				int chartLeftCol = chartCols + 1;
-				XSSFClientAnchor anchor1 = drawing1.createAnchor(0, 0, 0, 0, chartLeftCol, 0, chartLeftCol + 14, Math.min(numDemands + 5, 25));
+				XSSFClientAnchor anchor1 = drawing1.createAnchor(0, 0, 0, 0, chartLeftCol, 0, chartLeftCol + 14,
+						Math.min(numDemands + 5, 25));
 				XSSFChart chart1 = drawing1.createChart(anchor1);
 				chart1.setTitleText("Candidate Pipeline by Demand");
 				chart1.setTitleOverlay(false);
@@ -2252,10 +2309,10 @@ public class DemandServiceImpl implements DemandService {
 			int pieDataRow = numDemands + 3;
 			Row pieHdr = chartSheet.createRow(pieDataRow);
 			pieHdr.setHeightInPoints(18);
-			setCellHelper(pieHdr, 0, "Status",    navyHdrStyle);
-			setCellHelper(pieHdr, 1, "Count",     navyHdrStyle);
+			setCellHelper(pieHdr, 0, "Status", navyHdrStyle);
+			setCellHelper(pieHdr, 1, "Count", navyHdrStyle);
 			Row pieR1 = chartSheet.createRow(pieDataRow + 1);
-			setCellHelper(pieR1, 0, "Allocated",  cellStyle);
+			setCellHelper(pieR1, 0, "Allocated", cellStyle);
 			Cell pieV1 = pieR1.createCell(1);
 			pieV1.setCellValue(grandAlloc);
 			pieV1.setCellStyle(centerStyle);
@@ -2270,7 +2327,8 @@ public class DemandServiceImpl implements DemandService {
 				XSSFDrawing drawing2 = chartSheet.createDrawingPatriarch();
 				int chartLeftCol = chartCols + 1;
 				int pieTopRow = Math.min(numDemands + 5, 25) + 1;
-				XSSFClientAnchor anchor2 = drawing2.createAnchor(0, 0, 0, 0, chartLeftCol, pieTopRow, chartLeftCol + 10, pieTopRow + 15);
+				XSSFClientAnchor anchor2 = drawing2.createAnchor(0, 0, 0, 0, chartLeftCol, pieTopRow, chartLeftCol + 10,
+						pieTopRow + 15);
 				XSSFChart chart2 = drawing2.createChart(anchor2);
 				chart2.setTitleText("Overall Allocation Status");
 				chart2.setTitleOverlay(false);
@@ -2288,7 +2346,8 @@ public class DemandServiceImpl implements DemandService {
 			XSSFSheet masterSheet = workbook.createSheet("MasterData");
 			masterSheet.setDisplayGridlines(true);
 
-			String[] mHeaders = { "Client", "Skill", "Candidate Name", "Status", "Contact No", "Email", "Project", "Demand ID" };
+			String[] mHeaders = { "Client", "Skill", "Candidate Name", "Status", "Contact No", "Email", "Project",
+					"Demand ID" };
 			Row rMHead = masterSheet.createRow(0);
 			rMHead.setHeightInPoints(22);
 			for (int i = 0; i < mHeaders.length; i++) {
@@ -2321,8 +2380,6 @@ public class DemandServiceImpl implements DemandService {
 		}
 	}
 
-	
-
 	private static class MasterDataRow {
 		private String client;
 		private String skill;
@@ -2333,22 +2390,69 @@ public class DemandServiceImpl implements DemandService {
 		private String project;
 		private String demandId;
 
-		public String getClient() { return client; }
-		public void setClient(String client) { this.client = client; }
-		public String getSkill() { return skill; }
-		public void setSkill(String skill) { this.skill = skill; }
-		public String getCandidateName() { return candidateName; }
-		public void setCandidateName(String candidateName) { this.candidateName = candidateName; }
-		public String getStatus() { return status; }
-		public void setStatus(String status) { this.status = status; }
-		public String getContactNo() { return contactNo; }
-		public void setContactNo(String contactNo) { this.contactNo = contactNo; }
-		public String getEmail() { return email; }
-		public void setEmail(String email) { this.email = email; }
-		public String getProject() { return project; }
-		public void setProject(String project) { this.project = project; }
-		public String getDemandId() { return demandId; }
-		public void setDemandId(String demandId) { this.demandId = demandId; }
+		public String getClient() {
+			return client;
+		}
+
+		public void setClient(String client) {
+			this.client = client;
+		}
+
+		public String getSkill() {
+			return skill;
+		}
+
+		public void setSkill(String skill) {
+			this.skill = skill;
+		}
+
+		public String getCandidateName() {
+			return candidateName;
+		}
+
+		public void setCandidateName(String candidateName) {
+			this.candidateName = candidateName;
+		}
+
+		public String getStatus() {
+			return status;
+		}
+
+		public void setStatus(String status) {
+			this.status = status;
+		}
+
+		public String getContactNo() {
+			return contactNo;
+		}
+
+		public void setContactNo(String contactNo) {
+			this.contactNo = contactNo;
+		}
+
+		public String getEmail() {
+			return email;
+		}
+
+		public void setEmail(String email) {
+			this.email = email;
+		}
+
+		public String getProject() {
+			return project;
+		}
+
+		public void setProject(String project) {
+			this.project = project;
+		}
+
+		public String getDemandId() {
+			return demandId;
+		}
+
+		public void setDemandId(String demandId) {
+			this.demandId = demandId;
+		}
 	}
 
 	public static String determineCandidateStatus(List<GroupFlowDto> rows) {
@@ -2359,7 +2463,8 @@ public class DemandServiceImpl implements DemandService {
 		String overallStatus = first.getInterviewOverallStatus();
 
 		String resumeStatus = first.getCandidateResumeStatus();
-		if (resumeStatus != null && (resumeStatus.equalsIgnoreCase("Drop") || resumeStatus.equalsIgnoreCase("Duplicate"))) {
+		if (resumeStatus != null
+				&& (resumeStatus.equalsIgnoreCase("Drop") || resumeStatus.equalsIgnoreCase("Duplicate"))) {
 			return capitalize(resumeStatus);
 		}
 
@@ -2370,7 +2475,8 @@ public class DemandServiceImpl implements DemandService {
 					latestLvlRow = row;
 				} else {
 					if (row.getInterviewCompletedAt() != null) {
-						if (latestLvlRow.getInterviewCompletedAt() == null || row.getInterviewCompletedAt().isAfter(latestLvlRow.getInterviewCompletedAt())) {
+						if (latestLvlRow.getInterviewCompletedAt() == null
+								|| row.getInterviewCompletedAt().isAfter(latestLvlRow.getInterviewCompletedAt())) {
 							latestLvlRow = row;
 						}
 					} else if (latestLvlRow.getInterviewCompletedAt() == null) {
@@ -2406,9 +2512,11 @@ public class DemandServiceImpl implements DemandService {
 	}
 
 	private static String capitalize(String s) {
-		if (s == null || s.isBlank()) return "";
+		if (s == null || s.isBlank())
+			return "";
 		s = s.trim();
-		if (s.length() == 1) return s.toUpperCase();
+		if (s.length() == 1)
+			return s.toUpperCase();
 		return s.substring(0, 1).toUpperCase() + s.substring(1);
 	}
 
@@ -2421,50 +2529,66 @@ public class DemandServiceImpl implements DemandService {
 	private void autoSizeColumnsHelper(Sheet sheet, int colCount) {
 		for (int i = 0; i < colCount; i++) {
 			sheet.autoSizeColumn(i);
-			if (sheet.getColumnWidth(i) > 12000) sheet.setColumnWidth(i, 12000);
-			if (sheet.getColumnWidth(i) < 3000) sheet.setColumnWidth(i, 3000);
+			if (sheet.getColumnWidth(i) > 12000)
+				sheet.setColumnWidth(i, 12000);
+			if (sheet.getColumnWidth(i) < 3000)
+				sheet.setColumnWidth(i, 3000);
 		}
 	}
 
 	/**
 	 * Extracts the interview level prefix from a candidate status string.
-	 * E.g. "L1 Selected" → "L1", "HR Round Scheduled" → "HR Round", "Pending" → null
+	 * E.g. "L1 Selected" → "L1", "HR Round Scheduled" → "HR Round", "Pending" →
+	 * null
 	 */
 	private static String extractLevelFromStatus(String status) {
-		if (status == null || status.isBlank()) return null;
+		if (status == null || status.isBlank())
+			return null;
 		String upper = status.trim().toUpperCase();
-		if (upper.startsWith("L1"))    return "L1";
-		if (upper.startsWith("L2"))    return "L2";
-		if (upper.startsWith("L3"))    return "L3";
-		if (upper.startsWith("HR"))    return "HR Round";
-		if (upper.startsWith("FINAL")) return "Final Round";
+		if (upper.startsWith("L1"))
+			return "L1";
+		if (upper.startsWith("L2"))
+			return "L2";
+		if (upper.startsWith("L3"))
+			return "L3";
+		if (upper.startsWith("HR"))
+			return "HR Round";
+		if (upper.startsWith("FINAL"))
+			return "Final Round";
 		return null;
 	}
 
 	/**
-	 * Returns true if the candidate's status indicates a rejection/drop at any level.
+	 * Returns true if the candidate's status indicates a rejection/drop at any
+	 * level.
 	 * Matches "Rejected", "Drop", "Duplicate" (case-insensitive).
 	 */
 	private static boolean isRejectedStatus(String status) {
-		if (status == null) return false;
+		if (status == null)
+			return false;
 		String upper = status.toUpperCase();
 		return upper.contains("REJECT") || upper.contains("DROP") || upper.contains("DUPLICATE");
 	}
 
 	/**
 	 * Returns true if the candidate has been finally allocated/selected.
-	 * "Selected" alone (no level prefix) or containing "Allocated" means they made it.
+	 * "Selected" alone (no level prefix) or containing "Allocated" means they made
+	 * it.
 	 */
 	private static boolean isAllocatedStatus(String status) {
-		if (status == null) return false;
+		if (status == null)
+			return false;
 		String trimmed = status.trim();
-		String upper   = trimmed.toUpperCase();
+		String upper = trimmed.toUpperCase();
 		// Pure "Selected" (not "L1 Selected" – that just means they passed L1)
-		if (upper.equals("SELECTED") || upper.equals("ALLOCATED")) return true;
+		if (upper.equals("SELECTED") || upper.equals("ALLOCATED"))
+			return true;
 		// "Final Round Selected" counts as allocated
-		if (upper.startsWith("FINAL") && upper.contains("SELECT")) return true;
+		if (upper.startsWith("FINAL") && upper.contains("SELECT"))
+			return true;
 		// Anything explicitly containing "Allocated"
-		if (upper.contains("ALLOCATED")) return true;
+		if (upper.contains("ALLOCATED"))
+			return true;
 		return false;
 	}
 
@@ -2485,8 +2609,10 @@ public class DemandServiceImpl implements DemandService {
 				String rejectedLvl = "Rejected";
 				for (int i = levels.size() - 1; i >= 0; i--) {
 					LevelProgressDto lvl = levels.get(i);
-					if ("__META__".equals(lvl.getLevel())) continue;
-					if ("Rejected".equalsIgnoreCase(lvl.getStatus()) || "Fail".equalsIgnoreCase(lvl.getStatus()) || "Failed".equalsIgnoreCase(lvl.getStatus())) {
+					if ("__META__".equals(lvl.getLevel()))
+						continue;
+					if ("Rejected".equalsIgnoreCase(lvl.getStatus()) || "Fail".equalsIgnoreCase(lvl.getStatus())
+							|| "Failed".equalsIgnoreCase(lvl.getStatus())) {
 						rejectedLvl = lvl.getLevel() + " Rejected";
 						break;
 					}
@@ -2495,8 +2621,8 @@ public class DemandServiceImpl implements DemandService {
 			} else if ("Scheduled".equalsIgnoreCase(interview.getStatus())) {
 				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
 				List<LevelProgressDto> realLevels = levels.stream()
-					.filter(l -> !"__META__".equals(l.getLevel()))
-					.toList();
+						.filter(l -> !"__META__".equals(l.getLevel()))
+						.toList();
 				if (!realLevels.isEmpty()) {
 					LevelProgressDto latestLvl = realLevels.get(realLevels.size() - 1);
 					return latestLvl.getLevel() + " Scheduled";
@@ -2505,8 +2631,8 @@ public class DemandServiceImpl implements DemandService {
 			} else {
 				List<LevelProgressDto> levels = readProgress(interview.getLevelProgress());
 				List<LevelProgressDto> realLevels = levels.stream()
-					.filter(l -> !"__META__".equals(l.getLevel()))
-					.toList();
+						.filter(l -> !"__META__".equals(l.getLevel()))
+						.toList();
 				if (!realLevels.isEmpty()) {
 					LevelProgressDto latestLvl = realLevels.get(realLevels.size() - 1);
 					String lvlName = latestLvl.getLevel();

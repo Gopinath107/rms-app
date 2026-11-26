@@ -153,7 +153,7 @@ class DemandServiceTest {
 
 	@Test
 	void createDemand_blocksDuplicateDemandTitleForSameClient() {
-		// Mock count returns 1 when checking duplicates for the same client and project
+		// Mock count returns 1 when checking duplicates for the same client
 		when(demandRepo.count(any(Specification.class))).thenReturn(1L);
 
 		DemandCreateDto dto = new DemandCreateDto();
@@ -166,7 +166,7 @@ class DemandServiceTest {
 
 		assertThatThrownBy(() -> demandService.createDemand(dto))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessage("A Demand with this title already exists for this client and project. Please check the list.");
+				.hasMessage("A Demand with this title already exists for this client. Please check the list.");
 	}
 }
 

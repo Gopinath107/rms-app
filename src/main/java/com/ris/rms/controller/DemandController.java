@@ -385,13 +385,13 @@ public class DemandController {
 
 	@GetMapping("/shared-profiles/summary")
 
-	public ResponseEntity<Map<String, Object>> getSharedProfilesSummary() {
+	public ResponseEntity<Map<String, Object>> getSharedProfilesSummary(@RequestParam(required = false) Long userId) {
 
 		Map<String, Object> resp = new LinkedHashMap<>();
 
 		try {
 
-			SharedProfileSummaryDto summary = demandService.getSharedProfilesSummary();
+			SharedProfileSummaryDto summary = demandService.getSharedProfilesSummary(userId);
 
 			resp.put("result", summary);
 
@@ -424,7 +424,7 @@ public class DemandController {
 	@GetMapping("/shared-profiles")
 
 	public ResponseEntity<Map<String, Object>> getSharedProfilesList(
-
+			@RequestParam(required = false) Long userId,
 			@RequestParam(required = false, defaultValue = "all") String dateFilter,
 
 			@RequestParam(required = false) String fromDate,
@@ -449,9 +449,7 @@ public class DemandController {
 
 			Pageable pageable = PageRequest.of(page, size);
 
-			Page<SharedProfileItemDto> resultPage = demandService.getSharedProfilesList(
-
-					dateFilter, fromDate, toDate, demandId, clientId, status, search, pageable);
+			Page<SharedProfileItemDto> resultPage = demandService.getSharedProfilesList(userId, dateFilter, fromDate, toDate, demandId, clientId, status, search, pageable);
 
 			resp.put("result", resultPage);
 

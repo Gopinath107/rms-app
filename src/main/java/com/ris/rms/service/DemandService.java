@@ -36,9 +36,9 @@ public interface DemandService {
 	
 	void updateDemandStatusOnResumeShare(Long demandId);
 
-	SharedProfileSummaryDto getSharedProfilesSummary();
+	SharedProfileSummaryDto getSharedProfilesSummary(Long userId);
 
-	Page<SharedProfileItemDto> getSharedProfilesList(String dateFilter, String fromDate, String toDate,
+	Page<SharedProfileItemDto> getSharedProfilesList(Long userId, String dateFilter, String fromDate, String toDate,
 			Long demandId, Long clientId, String status, String search, Pageable pageable);
 
 	List<ProfileHistoryEventDto> getProfileHistory(Long demandId, String resourceType, Long resourceId);

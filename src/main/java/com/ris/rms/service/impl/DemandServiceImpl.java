@@ -2661,510 +2661,1015 @@ public class DemandServiceImpl implements DemandService {
 		return "Submitted";
 	}
 
-	public SharedProfileSummaryDto getSharedProfilesSummary() {
-		SharedProfileSummaryDto summary = new SharedProfileSummaryDto();
-		ZoneId zone = ZoneId.of("Asia/Kolkata");
-		LocalDate today = LocalDate.now(zone);
-		LocalDate yesterday = today.minusDays(1);
-
-		summary.setTodayEvents(rrRepo.countSubmissionsByDate(today));
-		summary.setTodayUnique(rrRepo.countUniqueResourcesByDate(today));
-		summary.setYesterdayEvents(rrRepo.countSubmissionsByDate(yesterday));
-		summary.setYesterdayUnique(rrRepo.countUniqueResourcesByDate(yesterday));
-		summary.setTotalEvents(rrRepo.countTotalActualSubmissions());
-		summary.setTotalUnique(rrRepo.countTotalUniqueActualResources());
-
-		List<ResourceRequest> recent = rrRepo.findRecentActualSubmissions(PageRequest.of(0, 50));
-		List<SharedProfileItemDto> items = recent.stream().map(this::mapToSharedProfileItem).toList();
-		summary.setRecords(items);
-
-		return summary;
-	}
-
-	@Override
-	@Transactional(readOnly = true)
-	public Page<SharedProfileItemDto> getSharedProfilesList(String dateFilter, String fromDate, String toDate,
-			Long demandId, Long clientId, String status, String search, Pageable pageable) {
-
-		Specification<ResourceRequest> spec = (root, query, cb) -> {
-			List<Predicate> predicates = new ArrayList<>();
-			predicates.add(cb.isNotNull(root.get("demandId")));
-			predicates.add(cb.or(cb.isNotNull(root.get("employeeId")), cb.isNotNull(root.get("candidateId"))));
-
-			if (demandId != null) {
-				predicates.add(cb.equal(root.get("demandId"), demandId));
-			}
-
-			ZoneId zone = ZoneId.of("Asia/Kolkata");
-			LocalDate today = LocalDate.now(zone);
-
-			if ("today".equalsIgnoreCase(dateFilter)) {
-				predicates.add(cb.equal(root.get("submittedDate"), today));
-			} else if ("yesterday".equalsIgnoreCase(dateFilter)) {
-				predicates.add(cb.equal(root.get("submittedDate"), today.minusDays(1)));
-			} else if ("last7days".equalsIgnoreCase(dateFilter)) {
-				predicates.add(cb.greaterThanOrEqualTo(root.get("submittedDate"), today.minusDays(7)));
-				predicates.add(cb.lessThanOrEqualTo(root.get("submittedDate"), today));
-			} else if ("custom".equalsIgnoreCase(dateFilter) || (StringUtils.hasText(fromDate) || StringUtils.hasText(toDate))) {
-				if (StringUtils.hasText(fromDate)) {
-					try {
-						predicates.add(cb.greaterThanOrEqualTo(root.get("submittedDate"), LocalDate.parse(fromDate)));
-					} catch (Exception ignored) {}
-				}
-				if (StringUtils.hasText(toDate)) {
-					try {
-						predicates.add(cb.lessThanOrEqualTo(root.get("submittedDate"), LocalDate.parse(toDate)));
-					} catch (Exception ignored) {}
-				}
-			}
-
-			return cb.and(predicates.toArray(new Predicate[0]));
-		};
-
-		List<ResourceRequest> all = rrRepo.findAll(spec, Sort.by(Sort.Direction.DESC, "submittedDate", "requestId"));
-		List<SharedProfileItemDto> dtoList = all.stream().map(this::mapToSharedProfileItem).collect(Collectors.toList());
-
-		if (clientId != null) {
-			dtoList = dtoList.stream()
-				.filter(item -> clientId.equals(item.getAccountId()))
-				.collect(Collectors.toList());
-		}
-
-		if (StringUtils.hasText(status) && !"all".equalsIgnoreCase(status)) {
-			String lowerStatus = status.toLowerCase();
-			dtoList = dtoList.stream()
-				.filter(item -> item.getStatus() != null && item.getStatus().toLowerCase().contains(lowerStatus))
-				.collect(Collectors.toList());
-		}
-
-		if (StringUtils.hasText(search)) {
-			String lowerSearch = search.trim().toLowerCase();
-			dtoList = dtoList.stream().filter(item -> {
-				boolean nameMatch = item.getResourceName() != null && item.getResourceName().toLowerCase().contains(lowerSearch);
-				boolean emailMatch = item.getResourceEmail() != null && item.getResourceEmail().toLowerCase().contains(lowerSearch);
-				boolean demandMatch = item.getDemandTitle() != null && item.getDemandTitle().toLowerCase().contains(lowerSearch);
-				boolean clientMatch = item.getClientName() != null && item.getClientName().toLowerCase().contains(lowerSearch);
-				boolean idMatch = item.getDemandId() != null && String.valueOf(item.getDemandId()).contains(lowerSearch);
-				return nameMatch || emailMatch || demandMatch || clientMatch || idMatch;
-			}).collect(Collectors.toList());
-		}
-
-		int start = (int) pageable.getOffset();
-		int end = Math.min((start + pageable.getPageSize()), dtoList.size());
-		List<SharedProfileItemDto> pagedItems = (start > dtoList.size()) ? Collections.emptyList() : dtoList.subList(start, end);
-
-		return new PageImpl<>(pagedItems, pageable, dtoList.size());
-	}
-
-	@Override
-	@Transactional(readOnly = true)
-	public List<ProfileHistoryEventDto> getProfileHistory(Long demandId, String resourceType, Long resourceId) {
-		Optional<ResourceRequest> rrOpt = Optional.empty();
-		if ("INTERNAL".equalsIgnoreCase(resourceType)) {
-			rrOpt = rrRepo.findFirstByDemandIdAndEmployeeId(demandId, resourceId);
-		} else if ("EXTERNAL".equalsIgnoreCase(resourceType)) {
-			rrOpt = rrRepo.findFirstByDemandIdAndCandidateId(demandId, resourceId);
-		}
-		if (rrOpt.isEmpty()) {
-			rrOpt = rrRepo.findFirstByDemandIdAndEmployeeId(demandId, resourceId);
-		}
-		if (rrOpt.isEmpty()) {
-			rrOpt = rrRepo.findFirstByDemandIdAndCandidateId(demandId, resourceId);
-		}
-
-		if (rrOpt.isEmpty()) {
-			return Collections.emptyList();
-		}
-
-		ResourceRequest rr = rrOpt.get();
-		List<ProfileHistoryEventDto> events = new ArrayList<>();
-		ZoneId zone = ZoneId.of("Asia/Kolkata");
-
-		ProfileHistoryEventDto submitEvt = new ProfileHistoryEventDto();
-		submitEvt.setEventType("SUBMITTED");
-		submitEvt.setNewStatus("Submitted");
-		if (rr.getRequesterUserId() != null) {
-			userAccountRepo.findById(rr.getRequesterUserId()).ifPresent(u -> {
-				submitEvt.setActionByName(u.getName());
-				submitEvt.setActionByEmail(u.getEmail());
-			});
-		}
-		if (rr.getSubmittedDate() != null) {
-			submitEvt.setTimestamp(rr.getSubmittedDate().atStartOfDay(zone).toOffsetDateTime());
-		}
-		submitEvt.setRemarks("Profile submitted against demand #" + demandId);
-
-		if ("INTERNAL".equalsIgnoreCase(rr.getResourceType()) || rr.getEmployeeId() != null) {
-			employeeDocumentRepo.findPrimaryResume(rr.getEmployeeId()).ifPresent(doc -> {
-				extractHistoryMetaTimestamp(doc.getResumeShareMeta(), demandId, submitEvt);
-			});
-		} else if (rr.getCandidateId() != null) {
-			candidateDocumentRepo.findPrimaryResume(rr.getCandidateId()).ifPresent(doc -> {
-				extractHistoryMetaTimestamp(doc.getResumeShareMeta(), demandId, submitEvt);
-			});
-		}
-		events.add(submitEvt);
-
-		List<Interview> interviews = interviewRepo.findAllByRequestIdOrderByScheduledAtDesc(rr.getRequestId());
-		List<Interview> chronInterviews = new ArrayList<>(interviews);
-		Collections.reverse(chronInterviews);
-
-		for (Interview iv : chronInterviews) {
-			List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
-			boolean hasRoundSelected = false;
-
-			for (LevelProgressDto lvl : levels) {
-				if ("__META__".equals(lvl.getLevel())) continue;
-
-				// Skip ONBOARDING from interview levels — onboarding/allocation is handled cleanly by ALLOCATED
-				if ("ONBOARDING".equalsIgnoreCase(lvl.getLevel())) continue;
-
-				if (StringUtils.hasText(lvl.getScheduledAtText())) {
-					ProfileHistoryEventDto schedEvt = new ProfileHistoryEventDto();
-					schedEvt.setEventType("INTERVIEW_SCHEDULED");
-					schedEvt.setRoundLevel(lvl.getLevel());
-					schedEvt.setNewStatus(lvl.getLevel() + " Scheduled");
-					schedEvt.setActionByName(lvl.getInterviewerName());
-					schedEvt.setActionByEmail(lvl.getInterviewerEmail());
-					schedEvt.setRemarks("Scheduled: " + lvl.getScheduledAtText() + (StringUtils.hasText(lvl.getInterviewNotes()) ? " - Notes: " + lvl.getInterviewNotes() : ""));
-					try {
-						if (iv.getScheduledAt() != null) {
-							schedEvt.setTimestamp(iv.getScheduledAt());
-						}
-					} catch (Exception ignored) {}
-					events.add(schedEvt);
-				}
-
-				if (StringUtils.hasText(lvl.getStatus()) && !"Pending".equalsIgnoreCase(lvl.getStatus()) && !"Scheduled".equalsIgnoreCase(lvl.getStatus())) {
-					ProfileHistoryEventDto compEvt = new ProfileHistoryEventDto();
-					compEvt.setEventType("INTERVIEW_COMPLETED");
-					compEvt.setRoundLevel(lvl.getLevel());
-					compEvt.setNewStatus(lvl.getLevel() + " " + lvl.getStatus());
-					compEvt.setActionByName(lvl.getInterviewerName());
-					compEvt.setActionByEmail(lvl.getInterviewerEmail());
-					compEvt.setRating(lvl.getRating());
-					compEvt.setRemarks(StringUtils.hasText(lvl.getFeedback()) ? lvl.getFeedback() : (StringUtils.hasText(lvl.getComments()) ? lvl.getComments() : lvl.getInterviewNotes()));
-					OffsetDateTime compTime = null;
-					if (lvl.getCompletedAt() != null) {
-						compTime = lvl.getCompletedAt();
-					} else if (StringUtils.hasText(lvl.getCompletedAtText())) {
-						try {
-							compTime = OffsetDateTime.parse(lvl.getCompletedAtText());
-						} catch (Exception ex) {
-							try {
-								compTime = java.time.LocalDateTime.parse(lvl.getCompletedAtText()).atZone(zone).toOffsetDateTime();
-							} catch (Exception ignored) {}
-						}
-					}
-					if (compTime == null) {
-						compTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
-					}
-					if (compTime == null) {
-						compTime = submitEvt.getTimestamp();
-					}
-					compEvt.setTimestamp(compTime);
-					events.add(compEvt);
-
-					String sLower = (lvl.getStatus() != null ? lvl.getStatus() : "").toLowerCase();
-					if (sLower.contains("select") || sLower.contains("clear")) {
-						hasRoundSelected = true;
-					}
-				}
-			}
-
-			// Only add separate generic SELECTED event if no individual interview level recorded a selection
-			if ("Selected".equalsIgnoreCase(iv.getStatus()) && !hasRoundSelected) {
-				ProfileHistoryEventDto selEvt = new ProfileHistoryEventDto();
-				selEvt.setEventType("SELECTED");
-				selEvt.setNewStatus("Selected");
-				OffsetDateTime selTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
-				if (selTime == null) {
-					selTime = submitEvt.getTimestamp();
-				}
-				selEvt.setTimestamp(selTime);
-				selEvt.setRemarks("Selected in interview process");
-				events.add(selEvt);
-			} else if ("Rejected".equalsIgnoreCase(iv.getStatus())) {
-				ProfileHistoryEventDto rejEvt = new ProfileHistoryEventDto();
-				rejEvt.setEventType("REJECTED");
-				rejEvt.setNewStatus("Rejected");
-				OffsetDateTime rejTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
-				if (rejTime == null) {
-					rejTime = submitEvt.getTimestamp();
-				}
-				rejEvt.setTimestamp(rejTime);
-				rejEvt.setRemarks(iv.getNotes() != null ? iv.getNotes() : "Candidate rejected in interview round");
-				events.add(rejEvt);
-			}
-		}
-
-		allocationRepo.findFirstByRequestIdOrderByStartDateDesc(rr.getRequestId()).ifPresent(alloc -> {
-			ProfileHistoryEventDto allocEvt = new ProfileHistoryEventDto();
-			allocEvt.setEventType("ALLOCATED");
-			allocEvt.setNewStatus("Allocated");
-			if (alloc.getStartDate() != null) {
-				allocEvt.setTimestamp(alloc.getStartDate().atStartOfDay(zone).toOffsetDateTime());
-			}
-			String billableStr = (alloc.getIsBillable() != null && alloc.getIsBillable()) ? "Billable" : "Non-billable";
-			allocEvt.setRemarks("Allocated to project role: " + (alloc.getProjectRole() != null ? alloc.getProjectRole() : "Resource") + " (" + billableStr + ")");
-			events.add(allocEvt);
-		});
-
-		// Fallback: If no allocation record exists in allocationRepo, check if ONBOARDING was marked completed in interview levels
-		boolean hasAllocatedEvent = events.stream().anyMatch(e -> "ALLOCATED".equalsIgnoreCase(e.getEventType()));
-		if (!hasAllocatedEvent) {
-			for (Interview iv : chronInterviews) {
-				List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
-				for (LevelProgressDto lvl : levels) {
-					if ("ONBOARDING".equalsIgnoreCase(lvl.getLevel()) && StringUtils.hasText(lvl.getStatus()) && !"Pending".equalsIgnoreCase(lvl.getStatus())) {
-						ProfileHistoryEventDto obEvt = new ProfileHistoryEventDto();
-						obEvt.setEventType("ALLOCATED");
-						obEvt.setNewStatus(lvl.getStatus().equalsIgnoreCase("On Boarded") ? "On Boarded" : lvl.getStatus());
-						obEvt.setActionByName(lvl.getInterviewerName());
-						obEvt.setRemarks(StringUtils.hasText(lvl.getFeedback()) ? lvl.getFeedback() : "Onboarding process completed");
-						obEvt.setTimestamp(iv.getCompletedAt() != null ? iv.getCompletedAt() : (iv.getScheduledAt() != null ? iv.getScheduledAt() : OffsetDateTime.now(zone)));
-						events.add(obEvt);
-						break;
-					}
-				}
-			}
-		}
-
-		// Natural lifecycle order: SUBMITTED (1) -> INTERVIEW_SCHEDULED (2) -> INTERVIEW_COMPLETED (3) -> SELECTED (4) -> ALLOCATED (5)
-		java.util.function.ToIntFunction<ProfileHistoryEventDto> stageRank = e -> {
-			String type = e.getEventType() != null ? e.getEventType() : "";
-			switch (type) {
-				case "SUBMITTED": return 1;
-				case "INTERVIEW_SCHEDULED": return 2;
-				case "INTERVIEW_COMPLETED": return 3;
-				case "SELECTED": return 4;
-				case "ALLOCATED": return 5;
-				default: return 6;
-			}
-		};
-
-		events.sort((a, b) -> {
-			int rA = stageRank.applyAsInt(a);
-			int rB = stageRank.applyAsInt(b);
-			OffsetDateTime tA = a.getTimestamp();
-			OffsetDateTime tB = b.getTimestamp();
-
-			// If both have timestamps and are strictly separated by more than 1 day
-			if (tA != null && tB != null) {
-				long diffMillis = Math.abs(java.time.Duration.between(tA, tB).toMillis());
-				if (diffMillis > 86400000L) {
-					if (rA < rB && tA.isAfter(tB)) return -1;
-					if (rA > rB && tA.isBefore(tB)) return 1;
-					return tA.compareTo(tB);
-				}
-				// Same calendar day / within 24h: lifecycle progression dominates
-				if (rA != rB) return Integer.compare(rA, rB);
-				return tA.compareTo(tB);
-			}
-
-			// If one or both timestamps are null, lifecycle stage rank dictates chronological progression
-			if (rA != rB) return Integer.compare(rA, rB);
-			if (tA != null) return -1;
-			if (tB != null) return 1;
-			return 0;
-		});
-
-		return events;
-	}
-
-	private SharedProfileItemDto mapToSharedProfileItem(ResourceRequest req) {
-		SharedProfileItemDto dto = new SharedProfileItemDto();
-		dto.setRequestId(req.getRequestId());
-		dto.setDemandId(req.getDemandId());
-		dto.setSubmittedDate(req.getSubmittedDate());
-		ZoneId zone = ZoneId.of("Asia/Kolkata");
-		if (req.getSubmittedDate() != null) {
-			dto.setSubmittedAt(req.getSubmittedDate().atStartOfDay(zone).toOffsetDateTime());
-		}
-
-		if (req.getDemandId() != null) {
-			demandRepo.findById(req.getDemandId()).ifPresent(d -> {
-				dto.setDemandTitle(d.getDemandtitle());
-				dto.setAccountId(d.getAccountId());
-				if (d.getAccountId() != null) {
-					accountRepo.findById(d.getAccountId()).ifPresent(acc -> dto.setClientName(acc.getAccountName()));
-				}
-			});
-		}
-
-		if (req.getRequesterUserId() != null) {
-			dto.setSubmittedByUserId(req.getRequesterUserId());
-			userAccountRepo.findById(req.getRequesterUserId()).ifPresent(u -> {
-				dto.setSubmittedByName(u.getName());
-				dto.setSubmittedByEmail(u.getEmail());
-			});
-		}
-
-		boolean isInternal = (req.getEmployeeId() != null) || "INTERNAL".equalsIgnoreCase(req.getResourceType());
-		if (isInternal && req.getEmployeeId() != null) {
-			dto.setResourceType("INTERNAL");
-			dto.setResourceId(req.getEmployeeId());
-			employeeRepo.findById(req.getEmployeeId()).ifPresent(emp -> {
-				String fullName = ((emp.getFirstName() == null ? "" : emp.getFirstName()) + " " + (emp.getLastName() == null ? "" : emp.getLastName())).trim();
-				dto.setResourceName(fullName);
-				dto.setResourceEmail(emp.getEmail());
-				dto.setDesignation(emp.getJobTitle() != null ? emp.getJobTitle() : emp.getCurrentJobTitle());
-				if (emp.getExperienceYears() != null) {
-					dto.setExperienceYears(emp.getExperienceYears() + " yrs");
-				} else if (emp.getTotalExperience() != null) {
-					dto.setExperienceYears(emp.getTotalExperience() + " yrs");
-				}
-			});
-			employeeDocumentRepo.findPrimaryResume(req.getEmployeeId()).ifPresent(doc -> {
-				parseExactSubmittedAt(doc.getResumeShareMeta(), req.getDemandId(), dto);
-			});
-		} else if (req.getCandidateId() != null) {
-			dto.setResourceType("EXTERNAL");
-			dto.setResourceId(req.getCandidateId());
-			candidateRepo.findById(req.getCandidateId()).ifPresent(c -> {
-				String fullName = ((c.getFirstName() == null ? "" : c.getFirstName()) + " " + (c.getLastName() == null ? "" : c.getLastName())).trim();
-				dto.setResourceName(fullName);
-				dto.setResourceEmail(c.getEmail());
-				if (c.getExperienceYears() != null) {
-					dto.setExperienceYears(c.getExperienceYears() + " yrs");
-				} else if (c.getTotalExperience() != null) {
-					dto.setExperienceYears(c.getTotalExperience() + " yrs");
-				}
-			});
-			candidateDocumentRepo.findPrimaryResume(req.getCandidateId()).ifPresent(doc -> {
-				parseExactSubmittedAt(doc.getResumeShareMeta(), req.getDemandId(), dto);
-			});
-		}
-
-		dto.setStatus(resolveResourceStatus(req));
-
-		interviewRepo.findTopByRequestIdOrderByInterviewIdDesc(req.getRequestId()).ifPresent(iv -> {
-			dto.setLastStatusUpdate(iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt());
-			List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
-			List<Map<String, Object>> lvlMaps = new ArrayList<>();
-			for (LevelProgressDto l : levels) {
-				if ("__META__".equals(l.getLevel())) continue;
-				Map<String, Object> lm = new LinkedHashMap<>();
-				lm.put("level", l.getLevel());
-				lm.put("status", l.getStatus());
-				lm.put("interviewerName", l.getInterviewerName());
-				lm.put("scheduledAtText", l.getScheduledAtText());
-				lm.put("completedAtText", l.getCompletedAtText());
-				lm.put("feedback", l.getFeedback());
-				lm.put("rating", l.getRating());
-				lvlMaps.add(lm);
-			}
-			dto.setInterviewLevels(lvlMaps);
-			if (!lvlMaps.isEmpty()) {
-				dto.setInterviewStage(String.valueOf(lvlMaps.get(lvlMaps.size() - 1).get("level")));
-			}
-		});
-
-		allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId()).ifPresent(alloc -> {
-			Map<String, Object> am = new LinkedHashMap<>();
-			am.put("allocationId", alloc.getAllocationId());
-			am.put("projectRole", alloc.getProjectRole());
-			am.put("startDate", alloc.getStartDate());
-			am.put("endDate", alloc.getEndDate());
-			am.put("status", alloc.getStatus());
-			am.put("isBillable", alloc.getIsBillable());
-			dto.setAllocation(am);
-		});
-
-		return dto;
-	}
-
-	private void parseExactSubmittedAt(String jsonMeta, Long targetDemandId, SharedProfileItemDto item) {
-		if (!StringUtils.hasText(jsonMeta)) return;
-		try {
-			String trimmed = jsonMeta.trim();
-			List<ResumeShareDto> history = new ArrayList<>();
-			if (trimmed.startsWith("[")) {
-				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
-			} else if (trimmed.startsWith("{")) {
-				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
-				if (single != null) history.add(single);
-			}
-			for (int i = history.size() - 1; i >= 0; i--) {
-				ResumeShareDto s = history.get(i);
-				boolean matched = false;
-				if (s.getSharedWith() != null) {
-					for (Map<String, Object> detail : s.getSharedWith()) {
-						if (targetDemandId.equals(asLong(detail.get("demandId")))) {
-							matched = true;
-							String specificDate = (String) detail.get("sharedAt");
-							if (specificDate != null) {
-								try {
-									item.setSubmittedAt(OffsetDateTime.parse(specificDate));
-								} catch (Exception ignored) {}
-							}
-							break;
-						}
-					}
-				}
-				if (!matched && s.getDemandIds() != null && s.getDemandIds().contains(targetDemandId)) {
-					matched = true;
-					if (s.getActionAt() != null) {
-						item.setSubmittedAt(s.getActionAt());
-					}
-				}
-				if (matched) {
-					if (StringUtils.hasText(s.getActionByUserName()) && !StringUtils.hasText(item.getSubmittedByName())) {
-						item.setSubmittedByName(s.getActionByUserName());
-					}
-					if (s.getActionAt() != null && item.getSubmittedAt() == null) {
-						item.setSubmittedAt(s.getActionAt());
-					}
-					break;
-				}
-			}
-		} catch (Exception ignored) {}
-	}
-
-	private void extractHistoryMetaTimestamp(String jsonMeta, Long targetDemandId, ProfileHistoryEventDto evt) {
-		if (!StringUtils.hasText(jsonMeta)) return;
-		try {
-			String trimmed = jsonMeta.trim();
-			List<ResumeShareDto> history = new ArrayList<>();
-			if (trimmed.startsWith("[")) {
-				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
-			} else if (trimmed.startsWith("{")) {
-				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
-				if (single != null) history.add(single);
-			}
-			for (int i = history.size() - 1; i >= 0; i--) {
-				ResumeShareDto s = history.get(i);
-				boolean matched = false;
-				if (s.getSharedWith() != null) {
-					for (Map<String, Object> detail : s.getSharedWith()) {
-						if (targetDemandId.equals(asLong(detail.get("demandId")))) {
-							matched = true;
-							String specificDate = (String) detail.get("sharedAt");
-							if (specificDate != null) {
-								try {
-									evt.setTimestamp(OffsetDateTime.parse(specificDate));
-								} catch (Exception ignored) {}
-							}
-							break;
-						}
-					}
-				}
-				if (!matched && s.getDemandIds() != null && s.getDemandIds().contains(targetDemandId)) {
-					matched = true;
-					if (s.getActionAt() != null) {
-						evt.setTimestamp(s.getActionAt());
-					}
-				}
-				if (matched) {
-					if (StringUtils.hasText(s.getActionByUserName())) {
-						evt.setActionByName(s.getActionByUserName());
-					}
-					if (s.getActionAt() != null && evt.getTimestamp() == null) {
-						evt.setTimestamp(s.getActionAt());
-					}
-					break;
-				}
-			}
-		} catch (Exception ignored) {}
+	public SharedProfileSummaryDto getSharedProfilesSummary(Long userId) {
+
+		SharedProfileSummaryDto summary = new SharedProfileSummaryDto();
+
+		ZoneId zone = ZoneId.of("Asia/Kolkata");
+
+		LocalDate today = LocalDate.now(zone);
+
+		LocalDate yesterday = today.minusDays(1);
+
+
+
+		summary.setTodayEvents(rrRepo.countSubmissionsByDate(today));
+
+		summary.setTodayUnique(rrRepo.countUniqueResourcesByDate(today));
+
+		summary.setYesterdayEvents(rrRepo.countSubmissionsByDate(yesterday));
+
+		summary.setYesterdayUnique(rrRepo.countUniqueResourcesByDate(yesterday));
+
+		summary.setTotalEvents(rrRepo.countTotalActualSubmissions());
+
+		summary.setTotalUnique(rrRepo.countTotalUniqueActualResources());
+
+
+
+		List<ResourceRequest> recent = rrRepo.findRecentActualSubmissions(PageRequest.of(0, 50));
+
+		List<SharedProfileItemDto> items = recent.stream().map(this::mapToSharedProfileItem).toList();
+
+		summary.setRecords(items);
+
+
+
+		return summary;
+
+	}
+
+
+
+	@Override
+
+	@Transactional(readOnly = true)
+
+	public Page<SharedProfileItemDto> getSharedProfilesList(Long userId, String dateFilter, String fromDate, String toDate,
+
+			Long demandId, Long clientId, String status, String search, Pageable pageable) {
+
+
+
+		Specification<ResourceRequest> spec = (root, query, cb) -> {
+
+			List<Predicate> predicates = new ArrayList<>();
+
+			predicates.add(cb.isNotNull(root.get("demandId")));
+
+			predicates.add(cb.or(cb.isNotNull(root.get("employeeId")), cb.isNotNull(root.get("candidateId"))));
+
+
+
+			if (demandId != null) {
+
+				predicates.add(cb.equal(root.get("demandId"), demandId));
+
+			}
+
+
+
+			ZoneId zone = ZoneId.of("Asia/Kolkata");
+
+			LocalDate today = LocalDate.now(zone);
+
+
+
+			if ("today".equalsIgnoreCase(dateFilter)) {
+
+				predicates.add(cb.equal(root.get("submittedDate"), today));
+
+			} else if ("yesterday".equalsIgnoreCase(dateFilter)) {
+
+				predicates.add(cb.equal(root.get("submittedDate"), today.minusDays(1)));
+
+			} else if ("last7days".equalsIgnoreCase(dateFilter)) {
+
+				predicates.add(cb.greaterThanOrEqualTo(root.get("submittedDate"), today.minusDays(7)));
+
+				predicates.add(cb.lessThanOrEqualTo(root.get("submittedDate"), today));
+
+			} else if ("custom".equalsIgnoreCase(dateFilter) || (StringUtils.hasText(fromDate) || StringUtils.hasText(toDate))) {
+
+				if (StringUtils.hasText(fromDate)) {
+
+					try {
+
+						predicates.add(cb.greaterThanOrEqualTo(root.get("submittedDate"), LocalDate.parse(fromDate)));
+
+					} catch (Exception ignored) {}
+
+				}
+
+				if (StringUtils.hasText(toDate)) {
+
+					try {
+
+						predicates.add(cb.lessThanOrEqualTo(root.get("submittedDate"), LocalDate.parse(toDate)));
+
+					} catch (Exception ignored) {}
+
+				}
+
+			}
+
+
+
+			return cb.and(predicates.toArray(new Predicate[0]));
+
+		};
+
+
+
+		List<ResourceRequest> all = rrRepo.findAll(spec, Sort.by(Sort.Direction.DESC, "submittedDate", "requestId"));
+
+		List<SharedProfileItemDto> dtoList = all.stream().map(this::mapToSharedProfileItem).collect(Collectors.toList());
+
+
+
+		if (clientId != null) {
+
+			dtoList = dtoList.stream()
+
+				.filter(item -> clientId.equals(item.getAccountId()))
+
+				.collect(Collectors.toList());
+
+		}
+
+
+
+		if (StringUtils.hasText(status) && !"all".equalsIgnoreCase(status)) {
+
+			String lowerStatus = status.toLowerCase();
+
+			dtoList = dtoList.stream()
+
+				.filter(item -> item.getStatus() != null && item.getStatus().toLowerCase().contains(lowerStatus))
+
+				.collect(Collectors.toList());
+
+		}
+
+
+
+		if (StringUtils.hasText(search)) {
+
+			String lowerSearch = search.trim().toLowerCase();
+
+			dtoList = dtoList.stream().filter(item -> {
+
+				boolean nameMatch = item.getResourceName() != null && item.getResourceName().toLowerCase().contains(lowerSearch);
+
+				boolean emailMatch = item.getResourceEmail() != null && item.getResourceEmail().toLowerCase().contains(lowerSearch);
+
+				boolean demandMatch = item.getDemandTitle() != null && item.getDemandTitle().toLowerCase().contains(lowerSearch);
+
+				boolean clientMatch = item.getClientName() != null && item.getClientName().toLowerCase().contains(lowerSearch);
+
+				boolean idMatch = item.getDemandId() != null && String.valueOf(item.getDemandId()).contains(lowerSearch);
+
+				return nameMatch || emailMatch || demandMatch || clientMatch || idMatch;
+
+			}).collect(Collectors.toList());
+
+		}
+
+
+
+		int start = (int) pageable.getOffset();
+
+		int end = Math.min((start + pageable.getPageSize()), dtoList.size());
+
+		List<SharedProfileItemDto> pagedItems = (start > dtoList.size()) ? Collections.emptyList() : dtoList.subList(start, end);
+
+
+
+		return new PageImpl<>(pagedItems, pageable, dtoList.size());
+
+	}
+
+
+
+	@Override
+
+	@Transactional(readOnly = true)
+
+	public List<ProfileHistoryEventDto> getProfileHistory(Long demandId, String resourceType, Long resourceId) {
+
+		Optional<ResourceRequest> rrOpt = Optional.empty();
+
+		if ("INTERNAL".equalsIgnoreCase(resourceType)) {
+
+			rrOpt = rrRepo.findFirstByDemandIdAndEmployeeId(demandId, resourceId);
+
+		} else if ("EXTERNAL".equalsIgnoreCase(resourceType)) {
+
+			rrOpt = rrRepo.findFirstByDemandIdAndCandidateId(demandId, resourceId);
+
+		}
+
+		if (rrOpt.isEmpty()) {
+
+			rrOpt = rrRepo.findFirstByDemandIdAndEmployeeId(demandId, resourceId);
+
+		}
+
+		if (rrOpt.isEmpty()) {
+
+			rrOpt = rrRepo.findFirstByDemandIdAndCandidateId(demandId, resourceId);
+
+		}
+
+
+
+		if (rrOpt.isEmpty()) {
+
+			return Collections.emptyList();
+
+		}
+
+
+
+		ResourceRequest rr = rrOpt.get();
+
+		List<ProfileHistoryEventDto> events = new ArrayList<>();
+
+		ZoneId zone = ZoneId.of("Asia/Kolkata");
+
+
+
+		ProfileHistoryEventDto submitEvt = new ProfileHistoryEventDto();
+
+		submitEvt.setEventType("SUBMITTED");
+
+		submitEvt.setNewStatus("Submitted");
+
+		if (rr.getRequesterUserId() != null) {
+
+			userAccountRepo.findById(rr.getRequesterUserId()).ifPresent(u -> {
+
+				submitEvt.setActionByName(u.getName());
+
+				submitEvt.setActionByEmail(u.getEmail());
+
+			});
+
+		}
+
+		if (rr.getSubmittedDate() != null) {
+
+			submitEvt.setTimestamp(rr.getSubmittedDate().atStartOfDay(zone).toOffsetDateTime());
+
+		}
+
+		submitEvt.setRemarks("Profile submitted against demand #" + demandId);
+
+
+
+		if ("INTERNAL".equalsIgnoreCase(rr.getResourceType()) || rr.getEmployeeId() != null) {
+
+			employeeDocumentRepo.findPrimaryResume(rr.getEmployeeId()).ifPresent(doc -> {
+
+				extractHistoryMetaTimestamp(doc.getResumeShareMeta(), demandId, submitEvt);
+
+			});
+
+		} else if (rr.getCandidateId() != null) {
+
+			candidateDocumentRepo.findPrimaryResume(rr.getCandidateId()).ifPresent(doc -> {
+
+				extractHistoryMetaTimestamp(doc.getResumeShareMeta(), demandId, submitEvt);
+
+			});
+
+		}
+
+		events.add(submitEvt);
+
+
+
+		List<Interview> interviews = interviewRepo.findAllByRequestIdOrderByScheduledAtDesc(rr.getRequestId());
+
+		List<Interview> chronInterviews = new ArrayList<>(interviews);
+
+		Collections.reverse(chronInterviews);
+
+
+
+		for (Interview iv : chronInterviews) {
+
+			List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+
+			boolean hasRoundSelected = false;
+
+
+
+			for (LevelProgressDto lvl : levels) {
+
+				if ("__META__".equals(lvl.getLevel())) continue;
+
+
+
+				// Skip ONBOARDING from interview levels — onboarding/allocation is handled cleanly by ALLOCATED
+
+				if ("ONBOARDING".equalsIgnoreCase(lvl.getLevel())) continue;
+
+
+
+				if (StringUtils.hasText(lvl.getScheduledAtText())) {
+
+					ProfileHistoryEventDto schedEvt = new ProfileHistoryEventDto();
+
+					schedEvt.setEventType("INTERVIEW_SCHEDULED");
+
+					schedEvt.setRoundLevel(lvl.getLevel());
+
+					schedEvt.setNewStatus(lvl.getLevel() + " Scheduled");
+
+					schedEvt.setActionByName(lvl.getInterviewerName());
+
+					schedEvt.setActionByEmail(lvl.getInterviewerEmail());
+
+					schedEvt.setRemarks("Scheduled: " + lvl.getScheduledAtText() + (StringUtils.hasText(lvl.getInterviewNotes()) ? " - Notes: " + lvl.getInterviewNotes() : ""));
+
+					try {
+
+						if (iv.getScheduledAt() != null) {
+
+							schedEvt.setTimestamp(iv.getScheduledAt());
+
+						}
+
+					} catch (Exception ignored) {}
+
+					events.add(schedEvt);
+
+				}
+
+
+
+				if (StringUtils.hasText(lvl.getStatus()) && !"Pending".equalsIgnoreCase(lvl.getStatus()) && !"Scheduled".equalsIgnoreCase(lvl.getStatus())) {
+
+					ProfileHistoryEventDto compEvt = new ProfileHistoryEventDto();
+
+					compEvt.setEventType("INTERVIEW_COMPLETED");
+
+					compEvt.setRoundLevel(lvl.getLevel());
+
+					compEvt.setNewStatus(lvl.getLevel() + " " + lvl.getStatus());
+
+					compEvt.setActionByName(lvl.getInterviewerName());
+
+					compEvt.setActionByEmail(lvl.getInterviewerEmail());
+
+					compEvt.setRating(lvl.getRating());
+
+					compEvt.setRemarks(StringUtils.hasText(lvl.getFeedback()) ? lvl.getFeedback() : (StringUtils.hasText(lvl.getComments()) ? lvl.getComments() : lvl.getInterviewNotes()));
+
+					OffsetDateTime compTime = null;
+
+					if (lvl.getCompletedAt() != null) {
+
+						compTime = lvl.getCompletedAt();
+
+					} else if (StringUtils.hasText(lvl.getCompletedAtText())) {
+
+						try {
+
+							compTime = OffsetDateTime.parse(lvl.getCompletedAtText());
+
+						} catch (Exception ex) {
+
+							try {
+
+								compTime = java.time.LocalDateTime.parse(lvl.getCompletedAtText()).atZone(zone).toOffsetDateTime();
+
+							} catch (Exception ignored) {}
+
+						}
+
+					}
+
+					if (compTime == null) {
+
+						compTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
+
+					}
+
+					if (compTime == null) {
+
+						compTime = submitEvt.getTimestamp();
+
+					}
+
+					compEvt.setTimestamp(compTime);
+
+					events.add(compEvt);
+
+
+
+					String sLower = (lvl.getStatus() != null ? lvl.getStatus() : "").toLowerCase();
+
+					if (sLower.contains("select") || sLower.contains("clear")) {
+
+						hasRoundSelected = true;
+
+					}
+
+				}
+
+			}
+
+
+
+			// Only add separate generic SELECTED event if no individual interview level recorded a selection
+
+			if ("Selected".equalsIgnoreCase(iv.getStatus()) && !hasRoundSelected) {
+
+				ProfileHistoryEventDto selEvt = new ProfileHistoryEventDto();
+
+				selEvt.setEventType("SELECTED");
+
+				selEvt.setNewStatus("Selected");
+
+				OffsetDateTime selTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
+
+				if (selTime == null) {
+
+					selTime = submitEvt.getTimestamp();
+
+				}
+
+				selEvt.setTimestamp(selTime);
+
+				selEvt.setRemarks("Selected in interview process");
+
+				events.add(selEvt);
+
+			} else if ("Rejected".equalsIgnoreCase(iv.getStatus())) {
+
+				ProfileHistoryEventDto rejEvt = new ProfileHistoryEventDto();
+
+				rejEvt.setEventType("REJECTED");
+
+				rejEvt.setNewStatus("Rejected");
+
+				OffsetDateTime rejTime = iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt();
+
+				if (rejTime == null) {
+
+					rejTime = submitEvt.getTimestamp();
+
+				}
+
+				rejEvt.setTimestamp(rejTime);
+
+				rejEvt.setRemarks(iv.getNotes() != null ? iv.getNotes() : "Candidate rejected in interview round");
+
+				events.add(rejEvt);
+
+			}
+
+		}
+
+
+
+		allocationRepo.findFirstByRequestIdOrderByStartDateDesc(rr.getRequestId()).ifPresent(alloc -> {
+
+			ProfileHistoryEventDto allocEvt = new ProfileHistoryEventDto();
+
+			allocEvt.setEventType("ALLOCATED");
+
+			allocEvt.setNewStatus("Allocated");
+
+			if (alloc.getStartDate() != null) {
+
+				allocEvt.setTimestamp(alloc.getStartDate().atStartOfDay(zone).toOffsetDateTime());
+
+			}
+
+			String billableStr = (alloc.getIsBillable() != null && alloc.getIsBillable()) ? "Billable" : "Non-billable";
+
+			allocEvt.setRemarks("Allocated to project role: " + (alloc.getProjectRole() != null ? alloc.getProjectRole() : "Resource") + " (" + billableStr + ")");
+
+			events.add(allocEvt);
+
+		});
+
+
+
+		// Fallback: If no allocation record exists in allocationRepo, check if ONBOARDING was marked completed in interview levels
+
+		boolean hasAllocatedEvent = events.stream().anyMatch(e -> "ALLOCATED".equalsIgnoreCase(e.getEventType()));
+
+		if (!hasAllocatedEvent) {
+
+			for (Interview iv : chronInterviews) {
+
+				List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+
+				for (LevelProgressDto lvl : levels) {
+
+					if ("ONBOARDING".equalsIgnoreCase(lvl.getLevel()) && StringUtils.hasText(lvl.getStatus()) && !"Pending".equalsIgnoreCase(lvl.getStatus())) {
+
+						ProfileHistoryEventDto obEvt = new ProfileHistoryEventDto();
+
+						obEvt.setEventType("ALLOCATED");
+
+						obEvt.setNewStatus(lvl.getStatus().equalsIgnoreCase("On Boarded") ? "On Boarded" : lvl.getStatus());
+
+						obEvt.setActionByName(lvl.getInterviewerName());
+
+						obEvt.setRemarks(StringUtils.hasText(lvl.getFeedback()) ? lvl.getFeedback() : "Onboarding process completed");
+
+						obEvt.setTimestamp(iv.getCompletedAt() != null ? iv.getCompletedAt() : (iv.getScheduledAt() != null ? iv.getScheduledAt() : OffsetDateTime.now(zone)));
+
+						events.add(obEvt);
+
+						break;
+
+					}
+
+				}
+
+			}
+
+		}
+
+
+
+		// Natural lifecycle order: SUBMITTED (1) -> INTERVIEW_SCHEDULED (2) -> INTERVIEW_COMPLETED (3) -> SELECTED (4) -> ALLOCATED (5)
+
+		java.util.function.ToIntFunction<ProfileHistoryEventDto> stageRank = e -> {
+
+			String type = e.getEventType() != null ? e.getEventType() : "";
+
+			switch (type) {
+
+				case "SUBMITTED": return 1;
+
+				case "INTERVIEW_SCHEDULED": return 2;
+
+				case "INTERVIEW_COMPLETED": return 3;
+
+				case "SELECTED": return 4;
+
+				case "ALLOCATED": return 5;
+
+				default: return 6;
+
+			}
+
+		};
+
+
+
+		events.sort((a, b) -> {
+
+			int rA = stageRank.applyAsInt(a);
+
+			int rB = stageRank.applyAsInt(b);
+
+			OffsetDateTime tA = a.getTimestamp();
+
+			OffsetDateTime tB = b.getTimestamp();
+
+
+
+			// If both have timestamps and are strictly separated by more than 1 day
+
+			if (tA != null && tB != null) {
+
+				long diffMillis = Math.abs(java.time.Duration.between(tA, tB).toMillis());
+
+				if (diffMillis > 86400000L) {
+
+					if (rA < rB && tA.isAfter(tB)) return -1;
+
+					if (rA > rB && tA.isBefore(tB)) return 1;
+
+					return tA.compareTo(tB);
+
+				}
+
+				// Same calendar day / within 24h: lifecycle progression dominates
+
+				if (rA != rB) return Integer.compare(rA, rB);
+
+				return tA.compareTo(tB);
+
+			}
+
+
+
+			// If one or both timestamps are null, lifecycle stage rank dictates chronological progression
+
+			if (rA != rB) return Integer.compare(rA, rB);
+
+			if (tA != null) return -1;
+
+			if (tB != null) return 1;
+
+			return 0;
+
+		});
+
+
+
+		return events;
+
+	}
+
+
+
+	private SharedProfileItemDto mapToSharedProfileItem(ResourceRequest req) {
+
+		SharedProfileItemDto dto = new SharedProfileItemDto();
+
+		dto.setRequestId(req.getRequestId());
+
+		dto.setDemandId(req.getDemandId());
+
+		dto.setSubmittedDate(req.getSubmittedDate());
+
+		ZoneId zone = ZoneId.of("Asia/Kolkata");
+
+		if (req.getSubmittedDate() != null) {
+
+			dto.setSubmittedAt(req.getSubmittedDate().atStartOfDay(zone).toOffsetDateTime());
+
+		}
+
+
+
+		if (req.getDemandId() != null) {
+
+			demandRepo.findById(req.getDemandId()).ifPresent(d -> {
+
+				dto.setDemandTitle(d.getDemandtitle());
+
+				dto.setAccountId(d.getAccountId());
+
+				if (d.getAccountId() != null) {
+
+					accountRepo.findById(d.getAccountId()).ifPresent(acc -> dto.setClientName(acc.getAccountName()));
+
+				}
+
+			});
+
+		}
+
+
+
+		if (req.getRequesterUserId() != null) {
+
+			dto.setSubmittedByUserId(req.getRequesterUserId());
+
+			userAccountRepo.findById(req.getRequesterUserId()).ifPresent(u -> {
+
+				dto.setSubmittedByName(u.getName());
+
+				dto.setSubmittedByEmail(u.getEmail());
+
+			});
+
+		}
+
+
+
+		boolean isInternal = (req.getEmployeeId() != null) || "INTERNAL".equalsIgnoreCase(req.getResourceType());
+
+		if (isInternal && req.getEmployeeId() != null) {
+
+			dto.setResourceType("INTERNAL");
+
+			dto.setResourceId(req.getEmployeeId());
+
+			employeeRepo.findById(req.getEmployeeId()).ifPresent(emp -> {
+
+				String fullName = ((emp.getFirstName() == null ? "" : emp.getFirstName()) + " " + (emp.getLastName() == null ? "" : emp.getLastName())).trim();
+
+				dto.setResourceName(fullName);
+
+				dto.setResourceEmail(emp.getEmail());
+
+				dto.setDesignation(emp.getJobTitle() != null ? emp.getJobTitle() : emp.getCurrentJobTitle());
+
+				if (emp.getExperienceYears() != null) {
+
+					dto.setExperienceYears(emp.getExperienceYears() + " yrs");
+
+				} else if (emp.getTotalExperience() != null) {
+
+					dto.setExperienceYears(emp.getTotalExperience() + " yrs");
+
+				}
+
+			});
+
+			employeeDocumentRepo.findPrimaryResume(req.getEmployeeId()).ifPresent(doc -> {
+
+				parseExactSubmittedAt(doc.getResumeShareMeta(), req.getDemandId(), dto);
+
+			});
+
+		} else if (req.getCandidateId() != null) {
+
+			dto.setResourceType("EXTERNAL");
+
+			dto.setResourceId(req.getCandidateId());
+
+			candidateRepo.findById(req.getCandidateId()).ifPresent(c -> {
+
+				String fullName = ((c.getFirstName() == null ? "" : c.getFirstName()) + " " + (c.getLastName() == null ? "" : c.getLastName())).trim();
+
+				dto.setResourceName(fullName);
+
+				dto.setResourceEmail(c.getEmail());
+
+				if (c.getExperienceYears() != null) {
+
+					dto.setExperienceYears(c.getExperienceYears() + " yrs");
+
+				} else if (c.getTotalExperience() != null) {
+
+					dto.setExperienceYears(c.getTotalExperience() + " yrs");
+
+				}
+
+			});
+
+			candidateDocumentRepo.findPrimaryResume(req.getCandidateId()).ifPresent(doc -> {
+
+				parseExactSubmittedAt(doc.getResumeShareMeta(), req.getDemandId(), dto);
+
+			});
+
+		}
+
+
+
+		dto.setStatus(resolveResourceStatus(req));
+
+
+
+		interviewRepo.findTopByRequestIdOrderByInterviewIdDesc(req.getRequestId()).ifPresent(iv -> {
+
+			dto.setLastStatusUpdate(iv.getCompletedAt() != null ? iv.getCompletedAt() : iv.getScheduledAt());
+
+			List<LevelProgressDto> levels = readProgress(iv.getLevelProgress());
+
+			List<Map<String, Object>> lvlMaps = new ArrayList<>();
+
+			for (LevelProgressDto l : levels) {
+
+				if ("__META__".equals(l.getLevel())) continue;
+
+				Map<String, Object> lm = new LinkedHashMap<>();
+
+				lm.put("level", l.getLevel());
+
+				lm.put("status", l.getStatus());
+
+				lm.put("interviewerName", l.getInterviewerName());
+
+				lm.put("scheduledAtText", l.getScheduledAtText());
+
+				lm.put("completedAtText", l.getCompletedAtText());
+
+				lm.put("feedback", l.getFeedback());
+
+				lm.put("rating", l.getRating());
+
+				lvlMaps.add(lm);
+
+			}
+
+			dto.setInterviewLevels(lvlMaps);
+
+			if (!lvlMaps.isEmpty()) {
+
+				dto.setInterviewStage(String.valueOf(lvlMaps.get(lvlMaps.size() - 1).get("level")));
+
+			}
+
+		});
+
+
+
+		allocationRepo.findFirstByRequestIdOrderByStartDateDesc(req.getRequestId()).ifPresent(alloc -> {
+
+			Map<String, Object> am = new LinkedHashMap<>();
+
+			am.put("allocationId", alloc.getAllocationId());
+
+			am.put("projectRole", alloc.getProjectRole());
+
+			am.put("startDate", alloc.getStartDate());
+
+			am.put("endDate", alloc.getEndDate());
+
+			am.put("status", alloc.getStatus());
+
+			am.put("isBillable", alloc.getIsBillable());
+
+			dto.setAllocation(am);
+
+		});
+
+
+
+		return dto;
+
+	}
+
+
+
+	private void parseExactSubmittedAt(String jsonMeta, Long targetDemandId, SharedProfileItemDto item) {
+
+		if (!StringUtils.hasText(jsonMeta)) return;
+
+		try {
+
+			String trimmed = jsonMeta.trim();
+
+			List<ResumeShareDto> history = new ArrayList<>();
+
+			if (trimmed.startsWith("[")) {
+
+				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
+
+			} else if (trimmed.startsWith("{")) {
+
+				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
+
+				if (single != null) history.add(single);
+
+			}
+
+			for (int i = history.size() - 1; i >= 0; i--) {
+
+				ResumeShareDto s = history.get(i);
+
+				boolean matched = false;
+
+				if (s.getSharedWith() != null) {
+
+					for (Map<String, Object> detail : s.getSharedWith()) {
+
+						if (targetDemandId.equals(asLong(detail.get("demandId")))) {
+
+							matched = true;
+
+							String specificDate = (String) detail.get("sharedAt");
+
+							if (specificDate != null) {
+
+								try {
+
+									item.setSubmittedAt(OffsetDateTime.parse(specificDate));
+
+								} catch (Exception ignored) {}
+
+							}
+
+							break;
+
+						}
+
+					}
+
+				}
+
+				if (!matched && s.getDemandIds() != null && s.getDemandIds().contains(targetDemandId)) {
+
+					matched = true;
+
+					if (s.getActionAt() != null) {
+
+						item.setSubmittedAt(s.getActionAt());
+
+					}
+
+				}
+
+				if (matched) {
+
+					if (StringUtils.hasText(s.getActionByUserName()) && !StringUtils.hasText(item.getSubmittedByName())) {
+
+						item.setSubmittedByName(s.getActionByUserName());
+
+					}
+
+					if (s.getActionAt() != null && item.getSubmittedAt() == null) {
+
+						item.setSubmittedAt(s.getActionAt());
+
+					}
+
+					break;
+
+				}
+
+			}
+
+		} catch (Exception ignored) {}
+
+	}
+
+
+
+	private void extractHistoryMetaTimestamp(String jsonMeta, Long targetDemandId, ProfileHistoryEventDto evt) {
+
+		if (!StringUtils.hasText(jsonMeta)) return;
+
+		try {
+
+			String trimmed = jsonMeta.trim();
+
+			List<ResumeShareDto> history = new ArrayList<>();
+
+			if (trimmed.startsWith("[")) {
+
+				history = om.readValue(trimmed, new TypeReference<List<ResumeShareDto>>() {});
+
+			} else if (trimmed.startsWith("{")) {
+
+				ResumeShareDto single = om.readValue(trimmed, ResumeShareDto.class);
+
+				if (single != null) history.add(single);
+
+			}
+
+			for (int i = history.size() - 1; i >= 0; i--) {
+
+				ResumeShareDto s = history.get(i);
+
+				boolean matched = false;
+
+				if (s.getSharedWith() != null) {
+
+					for (Map<String, Object> detail : s.getSharedWith()) {
+
+						if (targetDemandId.equals(asLong(detail.get("demandId")))) {
+
+							matched = true;
+
+							String specificDate = (String) detail.get("sharedAt");
+
+							if (specificDate != null) {
+
+								try {
+
+									evt.setTimestamp(OffsetDateTime.parse(specificDate));
+
+								} catch (Exception ignored) {}
+
+							}
+
+							break;
+
+						}
+
+					}
+
+				}
+
+				if (!matched && s.getDemandIds() != null && s.getDemandIds().contains(targetDemandId)) {
+
+					matched = true;
+
+					if (s.getActionAt() != null) {
+
+						evt.setTimestamp(s.getActionAt());
+
+					}
+
+				}
+
+				if (matched) {
+
+					if (StringUtils.hasText(s.getActionByUserName())) {
+
+						evt.setActionByName(s.getActionByUserName());
+
+					}
+
+					if (s.getActionAt() != null && evt.getTimestamp() == null) {
+
+						evt.setTimestamp(s.getActionAt());
+
+					}
+
+					break;
+
+				}
+
+			}
+
+		} catch (Exception ignored) {}
+
 	}
 }
